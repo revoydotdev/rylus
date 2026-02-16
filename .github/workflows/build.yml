@@ -92,7 +92,7 @@ jobs:
   build-macos:
     strategy:
       matrix:
-        os: [macos-latest, macos-14-large] # -latest is for Apple Silicon, -14-large is for Intel
+        os: [macos-latest, macos-15-intel] # -latest is for Apple Silicon, -15-intel is for Intel
     runs-on: ${{ matrix.os }}
     steps:
     - uses: actions/checkout@v6
