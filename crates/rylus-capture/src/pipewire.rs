@@ -257,8 +257,31 @@ impl Drop for PipeWireRecorder {
     }
 }
 
-fn handle_response<F>(
-    portal: Proxy<&SyncConnection>,
+/// Compute the predictable request object path from a handle_token.
+///
+/// Per the xdg-desktop-portal spec, the request path is:
+///   /org/freedesktop/portal/desktop/request/{sender}/{handle_token}
+/// where {sender} is the caller's unique bus name with ':' and '.' replaced by '_'.
+fn request_path(conn: &SyncConnection, handle_token: &str) -> dbus::Path<'static> {
+    // Per the xdg-desktop-portal spec, the sender part of the request path
+    // is the caller's unique bus name with the leading ':' removed and '.'
+    // replaced by '_'.
+    let sender = conn
+        .unique_name()
+        .to_string()
+        .trim_start_matches(':')
+        .replace('.', "_");
+    dbus::Path::new(format!(
+        "/org/freedesktop/portal/desktop/request/{sender}/{handle_token}"
+    ))
+    .unwrap()
+}
+
+/// Register a signal handler for the portal Response signal BEFORE making
+/// the D-Bus method call.  This avoids the race where the response arrives
+/// before the match rule is installed.
+fn register_response_handler<F>(
+    conn: &SyncConnection,
     path: dbus::Path<'static>,
     context: Arc<Mutex<CallBackContext>>,
     mut f: F,
@@ -279,30 +302,28 @@ where
     m.msg_type = Some(MessageType::Signal);
     m.sender = Some("org.freedesktop.portal.Desktop".into());
     m.interface = Some("org.freedesktop.portal.Request".into());
-    portal
-        .connection
-        .add_match(m, move |r: OrgFreedesktopPortalRequestResponse, c, m| {
-            let portal = get_portal(c);
-            debug!("Response from DBus: response: {:?}, message: {:?}", r, m);
-            match r.response {
-                0 => {}
-                1 => {
-                    context.lock().unwrap().failure = true;
-                    warn!("DBus response: User cancelled interaction.");
-                    return true;
-                }
-                c => {
-                    context.lock().unwrap().failure = true;
-                    warn!("DBus response: Unknown error, code: {}.", c);
-                    return true;
-                }
-            }
-            if let Err(err) = f(r, portal, m, context.clone()) {
+    conn.add_match(m, move |r: OrgFreedesktopPortalRequestResponse, c, m| {
+        let portal = get_portal(c);
+        debug!("Response from DBus: response: {:?}, message: {:?}", r, m);
+        match r.response {
+            0 => {}
+            1 => {
                 context.lock().unwrap().failure = true;
-                warn!("Error requesting screen capture via dbus: {}", err);
+                warn!("DBus response: User cancelled interaction.");
+                return true;
             }
-            true
-        })
+            c => {
+                context.lock().unwrap().failure = true;
+                warn!("DBus response: Unknown error, code: {}.", c);
+                return true;
+            }
+        }
+        if let Err(err) = f(r, portal, m, context.clone()) {
+            context.lock().unwrap().failure = true;
+            warn!("Error requesting screen capture via dbus: {}", err);
+        }
+        true
+    })
 }
 
 fn get_portal(conn: &SyncConnection) -> Proxy<'_, &SyncConnection> {
@@ -399,17 +420,11 @@ fn select_devices(
     context: Arc<Mutex<CallBackContext>>,
 ) -> Result<(), Box<dyn Error>> {
     let mut args: PropMap = HashMap::new();
-    let t: u64 = rand::random();
+    let handle_token = format!("rylus{}", rand::random::<u64>());
     args.insert(
         "handle_token".to_string(),
-        Variant(Box::new(format!("rylus{t}"))),
+        Variant(Box::new(handle_token.clone())),
     );
-
-    // TODO
-    //args.insert(
-    //    "restore_token".to_string(),
-    //    Variant(Box::new(format!("rylus{t}"))),
-    //);
 
     // persist modes:
     // 0: Do not persist (default)
@@ -425,10 +440,12 @@ fn select_devices(
     debug!("Available device types: {device_types}.");
     args.insert("types".to_string(), Variant(Box::new(device_types)));
 
-    let path = portal.select_devices(context.lock().unwrap().session.clone(), args)?;
-    handle_response(portal, path, context, |_, portal, _, context| {
+    // Register handler BEFORE making the call to avoid missing the response.
+    let expected_path = request_path(portal.connection, &handle_token);
+    register_response_handler(portal.connection, expected_path, context.clone(), |_, portal, _, context| {
         select_sources(portal, context)
     })?;
+    portal.select_devices(context.lock().unwrap().session.clone(), args)?;
     Ok(())
 }
 
@@ -439,10 +456,10 @@ fn select_sources(
     debug!("select_sources");
     let mut args: PropMap = HashMap::new();
 
-    let t: u64 = rand::random();
+    let handle_token = format!("rylus{}", rand::random::<u64>());
     args.insert(
         "handle_token".to_string(),
-        Variant(Box::new(format!("rylus{t}"))),
+        Variant(Box::new(handle_token.clone())),
     );
     // https://flatpak.github.io/xdg-desktop-portal/docs/doc-org.freedesktop.portal.ScreenCast.html#org-freedesktop-portal-screencast-selectsources
     // allow multiple sources
@@ -489,8 +506,10 @@ fn select_sources(
     };
     args.insert("cursor_mode".into(), Variant(Box::new(cursor_mode)));
 
-    let path = portal.select_sources(context.lock().unwrap().session.clone(), args)?;
-    handle_response(portal, path, context, on_select_sources_response)?;
+    // Register handler BEFORE making the call to avoid missing the response.
+    let expected_path = request_path(portal.connection, &handle_token);
+    register_response_handler(portal.connection, expected_path, context.clone(), on_select_sources_response)?;
+    portal.select_sources(context.lock().unwrap().session.clone(), args)?;
     Ok(())
 }
 
@@ -502,27 +521,31 @@ fn on_select_sources_response(
 ) -> Result<(), Box<dyn Error>> {
     debug!("on_select_sources_response");
     let mut args: PropMap = HashMap::new();
-    let t: u64 = rand::random();
+    let handle_token = format!("rylus{}", rand::random::<u64>());
     args.insert(
         "handle_token".to_string(),
-        Variant(Box::new(format!("rylus{t}"))),
+        Variant(Box::new(handle_token.clone())),
     );
-    let path = if context.lock().unwrap().has_remote_desktop {
+
+    // Register handler BEFORE making the call to avoid missing the response.
+    let expected_path = request_path(portal.connection, &handle_token);
+    register_response_handler(portal.connection, expected_path, context.clone(), on_start_response)?;
+
+    if context.lock().unwrap().has_remote_desktop {
         OrgFreedesktopPortalRemoteDesktop::start(
             &portal,
             context.lock().unwrap().session.clone(),
             "",
             args,
-        )?
+        )?;
     } else {
         OrgFreedesktopPortalScreenCast::start(
             &portal,
             context.lock().unwrap().session.clone(),
             "",
             args,
-        )?
-    };
-    handle_response(portal, path, context, on_start_response)?;
+        )?;
+    }
     Ok(())
 }
 
@@ -576,22 +599,26 @@ fn request_remote_desktop(
     let context = Arc::new(Mutex::new(context));
 
     let mut args: PropMap = HashMap::new();
-    let t1: u64 = rand::random();
-    let t2: u64 = rand::random();
+    let session_token = format!("rylus{}", rand::random::<u64>());
+    let handle_token = format!("rylus{}", rand::random::<u64>());
     args.insert(
         "session_handle_token".to_string(),
-        Variant(Box::new(format!("rylus{t1}"))),
+        Variant(Box::new(session_token)),
     );
     args.insert(
         "handle_token".to_string(),
-        Variant(Box::new(format!("rylus{t2}"))),
+        Variant(Box::new(handle_token.clone())),
     );
-    let path = if has_remote_desktop {
-        OrgFreedesktopPortalRemoteDesktop::create_session(&portal, args)?
+
+    // Register handler BEFORE making the call to avoid missing the response.
+    let expected_path = request_path(&conn, &handle_token);
+    register_response_handler(&conn, expected_path, context.clone(), on_create_session_response)?;
+
+    if has_remote_desktop {
+        OrgFreedesktopPortalRemoteDesktop::create_session(&portal, args)?;
     } else {
-        OrgFreedesktopPortalScreenCast::create_session(&portal, args)?
-    };
-    handle_response(portal, path, context.clone(), on_create_session_response)?;
+        OrgFreedesktopPortalScreenCast::create_session(&portal, args)?;
+    }
 
     // Wait up to 30 seconds for user interaction with the portal dialog
     let timeout_iters = 300; // 300 * 100ms = 30s
