@@ -247,6 +247,10 @@ class Settings {
     }
 
     send_server_config() {
+        if (this.capturable_select.options.length === 0) {
+            log(LogLevel.DEBUG, "No capturables available, skipping config send.");
+            return;
+        }
         let config = new Object(null);
         config["capturable_id"] = Number(this.capturable_select.value);
         for (const key of [
@@ -387,6 +391,10 @@ class Settings {
         else if (current_selection)
             // Can't find the window, so don't select anything
             this.capturable_select.value = "";
+
+        // Auto-send config now that capturables are available
+        if (window_names.length > 0)
+            this.send_server_config();
     }
 
     toggle_energysaving(energysaving: boolean) {

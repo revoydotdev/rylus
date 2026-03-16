@@ -123,7 +123,7 @@ pub struct Config {
     pub no_gui: bool,
     #[cfg(target_os = "linux")]
     #[arg(long, help = "Wayland/PipeWire Support (auto-detected from XDG_SESSION_TYPE).")]
-    #[serde(default = "default_wayland_support")]
+    #[serde(default = "default_wayland_support", skip_serializing)]
     pub wayland_support: bool,
 
     #[arg(long, help = "Print template of index.html served by Rylus.")]
@@ -216,12 +216,12 @@ pub fn write_config(conf: &Config) {
 }
 
 pub fn get_config() -> Config {
-    let args = std::env::args();
-    let config = if let Some(mut config) = read_config() {
+    let args: Vec<String> = std::env::args().collect();
+    let mut config = if let Some(mut config) = read_config() {
         // The first element of args is always the binary name, so len > 1 means
         // the user passed actual command-line arguments that should override the config file.
         if args.len() > 1 {
-            config.update_from(args);
+            config.update_from(&args);
         }
         config
     } else {
@@ -229,6 +229,15 @@ pub fn get_config() -> Config {
     };
     if config.web_port < 1024 {
         warn!("Port {} is in the privileged range (< 1024) and may require elevated permissions.", config.web_port);
+    }
+    // Auto-detect Wayland support at runtime unless the user explicitly passed
+    // --wayland-support on the CLI to override.
+    #[cfg(target_os = "linux")]
+    {
+        let explicitly_set = args.iter().any(|a| a == "--wayland-support");
+        if !explicitly_set {
+            config.wayland_support = default_wayland_support();
+        }
     }
     config
 }
