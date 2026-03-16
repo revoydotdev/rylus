@@ -320,9 +320,13 @@ impl<S, R, FnUInput> RylusClientHandler<S, R, FnUInput> {
                 ));
             }
         } else {
-            error!("Got invalid id for capturable: {}", config.capturable_id);
+            warn!(
+                "Got invalid id for capturable: {} (list has {} entries). \
+                 On Wayland, click \"Refresh List\" after granting portal access.",
+                config.capturable_id, self.capturables.len()
+            );
             self.send_message(MessageOutbound::ConfigError(
-                "Invalid id for capturable!".to_string(),
+                "No capturable selected. Click \"Refresh List\" to request screen access.".to_string(),
             ));
         }
     }
