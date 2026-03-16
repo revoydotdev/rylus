@@ -32,25 +32,25 @@ jobs:
       uses: actions/upload-artifact@v6
       with:
         name: linux
-        path: packages/weylus-linux.zip
+        path: packages/rylus-linux.zip
     - name: Artifacts2
       uses: actions/upload-artifact@v6
       with:
         name: linux-deb
-        path: packages/Weylus*.deb
+        path: packages/Rylus*.deb
     - name: Artifacts3
       uses: actions/upload-artifact@v6
       with:
         name: windows
-        path: packages/weylus-windows.zip
+        path: packages/rylus-windows.zip
     - name: Publish
       uses: softprops/action-gh-release@v2
       if: startsWith(github.ref, 'refs/tags/')
       with:
           files: |
-            packages/weylus-linux.zip
-            packages/Weylus*.deb
-            packages/weylus-windows.zip
+            packages/rylus-linux.zip
+            packages/Rylus*.deb
+            packages/rylus-windows.zip
           prerelease: false
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -72,19 +72,19 @@ jobs:
           target
         key: ${{ runner.os }}-alpine-cargo-${{ hashFiles('Cargo.lock') }}
     - name: Build
-      run: RUSTFLAGS='-C target-feature=-crt-static' cargo build --release && cd target/release && tar czf weylus-linux-alpine-musl.tar.gz weylus
+      run: RUSTFLAGS='-C target-feature=-crt-static' cargo build --release && cd target/release && tar czf rylus-linux-alpine-musl.tar.gz rylus
       shell: bash
     - name: Artifacts1
       uses: actions/upload-artifact@v6
       with:
         name: linux-alpine-musl
-        path: target/release/weylus-linux-alpine-musl.tar.gz
+        path: target/release/rylus-linux-alpine-musl.tar.gz
     - name: Publish
       uses: softprops/action-gh-release@v2
       if: startsWith(github.ref, 'refs/tags/')
       with:
           files: |
-            target/release/weylus-linux-alpine-musl.tar.gz
+            target/release/rylus-linux-alpine-musl.tar.gz
           prerelease: false
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -120,7 +120,7 @@ jobs:
       run: |
         MACOS_BUILD_NAME=macos-$([ "${{ matrix.os }}" == "macos-latest" ] && echo "arm" || echo "intel")
         echo "MACOS_BUILD_NAME=$MACOS_BUILD_NAME" >> $GITHUB_ENV
-        cd target/release/bundle/osx/ && zip -r ${MACOS_BUILD_NAME}.zip Weylus.app
+        cd target/release/bundle/osx/ && zip -r ${MACOS_BUILD_NAME}.zip Rylus.app
     - name: Artifacts
       uses: actions/upload-artifact@v6
       with:

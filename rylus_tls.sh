@@ -8,32 +8,32 @@ function die {
 }
 
 # generate certificate if it doesn't exist yet
-if [ ! -e weylus.pem ]
+if [ ! -e rylus.pem ]
 then
-    openssl req -batch -newkey rsa:4096 -sha256 -keyout weylus.key -nodes -x509 -days 365 \
-        -subj="/CN=Weylus" -out weylus.crt
+    openssl req -batch -newkey rsa:4096 -sha256 -keyout rylus.key -nodes -x509 -days 365 \
+        -subj="/CN=Rylus" -out rylus.crt
 
     # combine into a pem file as this is everything hitch needs
-    cat weylus.key weylus.crt > weylus.pem
-    rm weylus.key weylus.crt
+    cat rylus.key rylus.crt > rylus.pem
+    rm rylus.key rylus.crt
 fi
 
-# WEYLUS can be used to determine which version of Weylus to run
-# If unset, try ./weylus and then weylus from path. If both fail,
-# read the path to Weylus from stdin.
-if [ -z "$WEYLUS" ]
+# RYLUS can be used to determine which version of Rylus to run
+# If unset, try ./rylus and then rylus from path. If both fail,
+# read the path to Rylus from stdin.
+if [ -z "$RYLUS" ]
 then
-    if [ -e weylus ]
+    if [ -e rylus ]
     then
-        WEYLUS=./weylus
+        RYLUS=./rylus
     else
-        if which weylus > /dev/null 2>&1
+        if which rylus > /dev/null 2>&1
         then
-            WEYLUS=weylus
+            RYLUS=rylus
         else
-            echo "Please specify path to weylus."
+            echo "Please specify path to rylus."
             echo -n "> "
-            read -r WEYLUS
+            read -r RYLUS
         fi
     fi
 fi
@@ -49,16 +49,16 @@ fi
 trap die SIGINT
 
 # The TLS proxy will be set up as follows: Proxy all incoming traffic from
-# port 1701 to 1702 on which the actual instance of Weylus is running.
+# port 1701 to 1702 on which the actual instance of Rylus is running.
 
-# start Weylus listening only on the local interface
-$WEYLUS --bind-address "127.0.0.1" \
+# start Rylus listening only on the local interface
+$RYLUS --bind-address "127.0.0.1" \
     --web-port "1702" \
     --access-code "$ACCESS_CODE" \
     --no-gui &
 
 # start the proxy
 hitch --frontend="[0.0.0.0]:1701" --backend="[127.0.0.1]:1702" \
-    --daemon=off --tls-protos="TLSv1.2 TLSv1.3" "weylus.pem" &
+    --daemon=off --tls-protos="TLSv1.2 TLSv1.3" "rylus.pem" &
 
 wait
