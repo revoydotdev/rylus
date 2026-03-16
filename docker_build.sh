@@ -9,11 +9,11 @@ cargo build --target x86_64-pc-windows-gnu --release
 (cd deps && ./clean.sh)
 
 # build linux versions
-cargo deb --  --features=va-static
+cargo deb --package rylus-server -- --features=va-static
 
 # check if installing works
-dpkg -i target/debian/Weylus*.deb
-cp target/release/weylus target/release/weylus_va_static
+dpkg -i target/debian/Rylus*.deb
+cp target/release/rylus target/release/rylus_va_static
 
 # build version with dynamic libva
 cargo build --release
@@ -25,15 +25,15 @@ PKGDIR="$PWD/packages"
 # package windows
 (
   cd target/x86_64-pc-windows-gnu/release/
-  zip weylus-windows.zip weylus.exe
-  mv weylus-windows.zip "$PKGDIR/"
+  zip rylus-windows.zip rylus.exe
+  mv rylus-windows.zip "$PKGDIR/"
 )
 
 # package linux
 (
-  cp target/debian/Weylus*.deb "$PKGDIR/"
-  cp weylus.desktop target/release/
+  cp target/debian/Rylus*.deb "$PKGDIR/"
+  cp packaging/rylus.desktop target/release/
   cd target/release/
-  zip weylus-linux.zip weylus weylus_va_static weylus.desktop
-  mv weylus-linux.zip "$PKGDIR/"
+  zip rylus-linux.zip rylus rylus_va_static rylus.desktop
+  mv rylus-linux.zip "$PKGDIR/"
 )

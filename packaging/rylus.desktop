@@ -1,10 +1,10 @@
 [Desktop Entry]
 Type=Application
-Name=Weylus
+Name=Rylus
 Comment=Use your tablet as graphic tablet/touch screen on your computer.
-TryExec=weylus
-Exec=weylus
+TryExec=rylus
+Exec=rylus
 Terminal=false
 Icon=input-tablet
 Categories=Office;Graphics;Education;Presentation;
-StartupWMClass=weylus
+StartupWMClass=rylus
