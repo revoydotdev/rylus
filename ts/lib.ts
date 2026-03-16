@@ -20,6 +20,14 @@ let last_fps_calc: number = performance.now();
 
 let check_video: HTMLInputElement;
 
+let activeWebSocket: WebSocket | null = null;
+
+function wsSend(data: string) {
+    if (activeWebSocket && activeWebSocket.readyState === WebSocket.OPEN) {
+        activeWebSocket.send(data);
+    }
+}
+
 function run(level: string) {
     window.onload = () => {
         log_pre = document.getElementById("log") as HTMLPreElement;
@@ -197,9 +205,9 @@ class Settings {
             document.getElementById("canvas").classList.toggle("vanish", enabled);
             this.save_settings();
             if (enabled) {
-                this.webSocket.send('"ResumeVideo"');
+                wsSend('"ResumeVideo"');
             } else {
-                this.webSocket.send('"PauseVideo"');
+                wsSend('"PauseVideo"');
             }
         }
 
@@ -231,9 +239,9 @@ class Settings {
         this.client_name_input.onchange = upd_server_config;
         this.frame_rate_input.onchange = upd_server_config;
 
-        document.getElementById("refresh").onclick = () => this.webSocket.send('"GetCapturableList"');
+        document.getElementById("refresh").onclick = () => wsSend('"GetCapturableList"');
         document.getElementById("custom_input_areas").onclick = () => {
-            this.webSocket.send('"ChooseCustomInputAreas"');
+            wsSend('"ChooseCustomInputAreas"');
         };
         this.capturable_select.onchange = () => this.send_server_config();
     }
@@ -251,7 +259,7 @@ class Settings {
         config["frame_rate"] = frame_rate_scale(this.frame_rate_input.valueAsNumber);
         if (this.client_name_input.value)
             config["client_name"] = this.client_name_input.value;
-        this.webSocket.send(JSON.stringify({ "Config": config }));
+        wsSend(JSON.stringify({ "Config": config }));
     }
 
     save_settings() {
@@ -277,6 +285,10 @@ class Settings {
         }
         try {
             let settings = JSON.parse(settings_string);
+            if (typeof settings !== "object" || settings === null) {
+                console.warn("Failed to load settings from localStorage: parsed value is not an object");
+                return;
+            }
             for (const [key, elem] of this.checks.entries()) {
                 if (typeof settings[key] === "boolean")
                     elem.checked = settings[key];
@@ -329,7 +341,8 @@ class Settings {
             if (client_name)
                 this.client_name_input.value = client_name;
 
-        } catch {
+        } catch (e) {
+            console.warn("Failed to load settings from localStorage:", e);
             log(LogLevel.DEBUG, "Failed to load settings.")
             return;
         }
@@ -388,8 +401,11 @@ class Settings {
             this.checks.get("enable_video").checked = false;
             this.checks.get("enable_video").disabled = true;
             this.checks.get("enable_video").dispatchEvent(new Event("change"));
-        } else
+        } else {
             this.checks.get("enable_video").disabled = false;
+            this.checks.get("enable_video").checked = true;
+            this.checks.get("enable_video").dispatchEvent(new Event("change"));
+        }
         if (settings)
             new PointerHandler(this.webSocket);
     }
@@ -423,7 +439,7 @@ class PEvent {
     height: number;
 
     constructor(eventType: string, event: PointerEvent, targetRect: DOMRect) {
-        let diag_len = Math.sqrt(targetRect.width * targetRect.width + targetRect.height * targetRect.height)
+        let diag_len = Math.sqrt(targetRect.width * targetRect.width + targetRect.height * targetRect.height) || 1
         this.event_type = eventType.toString();
         this.pointer_id = event.pointerId;
         this.timestamp = Math.round(event.timeStamp * 1000);
@@ -462,7 +478,7 @@ class PEvent {
         this.y = (event.clientY - targetRect.top) / targetRect.height * y_scale + y_offset;
         // this.movement_x = event.movementX ? event.movementX : 0;
         // this.movement_y = event.movementY ? event.movementY : 0;
-        this.pressure = Math.max(event.pressure, settings.range_min_pressure.valueAsNumber);
+        this.pressure = event.pressure === 0 ? 0 : Math.max(event.pressure, settings.range_min_pressure.valueAsNumber);
         this.tilt_x = event.tiltX;
         this.tilt_y = event.tiltY;
         this.width = event.width / diag_len;
@@ -543,6 +559,7 @@ class Painter {
     vertex_buffer: WebGLBuffer;
     time_attr: WebGLUniformLocation;
     initialized: boolean;
+    animFrameId: number;
 
     constructor(canvas: HTMLCanvasElement) {
         this.canvas = canvas;
@@ -596,11 +613,12 @@ class Painter {
         gl.enableVertexAttribArray(this.vertex_attr);
         gl.useProgram(shader_program);
         this.initialized = true;
-        requestAnimationFrame(() => this.render());
+        this.animFrameId = requestAnimationFrame(() => this.render());
     }
 
     render() {
         // only do work if necessary
+        // Only render drawing lines when video is disabled — otherwise the video covers the canvas.
         if (!check_video.checked && (this.lines_active.size > 0 || this.lines_old.length > 0)) {
             if (this.lines_old.length > 0) {
                 if (performance.now() - this.lines_old[0][this.lines_old[0].length - 1] > fade_time)
@@ -624,7 +642,14 @@ class Painter {
                 gl.drawArrays(gl.TRIANGLE_STRIP, 0, vertices.length / 3)
             }
         }
-        requestAnimationFrame(() => this.render());
+        this.animFrameId = requestAnimationFrame(() => this.render());
+    }
+
+    destroy() {
+        if (this.animFrameId) {
+            cancelAnimationFrame(this.animFrameId);
+            this.animFrameId = 0;
+        }
     }
 
     appendEventToLine(event: PointerEvent) {
@@ -669,7 +694,7 @@ class Painter {
 
     onmove(event: PointerEvent) {
         if (this.lines_active.has(event.pointerId)) {
-            const events = typeof event.getCoalescedEvents === 'function' ? event.getCoalescedEvents() : [event];
+            const events = event.getCoalescedEvents?.() ?? [event];
             for (const e of events) {
                 this.appendEventToLine(e);
             }
@@ -737,7 +762,7 @@ class PointerHandler {
 
         for (let elem of [video, canvas]) {
             elem.onwheel = (e) => {
-                this.webSocket.send(JSON.stringify({ "WheelEvent": new WEvent(e) }));
+                wsSend(JSON.stringify({ "WheelEvent": new WEvent(e) }));
             }
         }
     }
@@ -783,10 +808,12 @@ class PointerHandler {
                 for (let prop of props) {
                     let span_id = `prop_${prop}_span`;
                     let span = document.getElementById(span_id);
-                    span = document.createElement("span");
-                    span.id = span_id;
-                    debug_overlay.appendChild(span);
-                    debug_overlay.appendChild(document.createElement("br"));
+                    if (!span) {
+                        span = document.createElement("span");
+                        span.id = span_id;
+                        debug_overlay.appendChild(span);
+                        debug_overlay.appendChild(document.createElement("br"));
+                    }
                 }
             }
             for (let prop of props) {
@@ -804,9 +831,9 @@ class PointerHandler {
         }
         if (this.pointerTypes.includes(event.pointerType)) {
             let rect = (event.target as HTMLElement).getBoundingClientRect();
-            const events = event_type === "pointermove" && typeof event.getCoalescedEvents === 'function' ? event.getCoalescedEvents() : [event];
+            const events = event_type === "pointermove" ? (event.getCoalescedEvents?.() ?? [event]) : [event];
             for (let event of events) {
-                this.webSocket.send(
+                wsSend(
                     JSON.stringify(
                         {
                             "PointerEvent": new PEvent(
@@ -887,7 +914,7 @@ class KeyboardHandler {
     }
 
     onEvent(event: KeyboardEvent, event_type: string) {
-        this.webSocket.send(JSON.stringify({ "KeyboardEvent": new KEvent(event_type, event) }));
+        wsSend(JSON.stringify({ "KeyboardEvent": new KEvent(event_type, event) }));
         event.preventDefault();
         event.stopPropagation();
         return false;
@@ -913,6 +940,8 @@ function handle_messages(
     let mediaSource: MediaSource = null;
     let sourceBuffer: SourceBuffer = null;
     let queue = [];
+    let prevObjectURL: string = null;
+    let health_frame_count = 0;
     const MAX_BUFFER_LENGTH = 20;  // In seconds
     function upd_buf() {
         if (sourceBuffer == null)
@@ -941,13 +970,24 @@ function handle_messages(
     }
     webSocket.onmessage = (event: MessageEvent) => {
         if (typeof event.data == "string") {
-            let msg = JSON.parse(event.data);
+            let msg;
+            try {
+                msg = JSON.parse(event.data);
+            } catch (e) {
+                log(LogLevel.ERROR, "Failed to parse message from server: " + e);
+                return;
+            }
             if (typeof msg == "string") {
                 if (msg == "NewVideo") {
                     let MS = window.ManagedMediaSource ? window.ManagedMediaSource : window.MediaSource;
                     mediaSource = new MS();
                     sourceBuffer = null;
-                    video.src = URL.createObjectURL(mediaSource);
+                    queue.length = 0;  // Clear stale frames from previous video
+                    if (prevObjectURL) {
+                        URL.revokeObjectURL(prevObjectURL);
+                    }
+                    prevObjectURL = URL.createObjectURL(mediaSource);
+                    video.src = prevObjectURL;
                     mediaSource.addEventListener("sourceopen", (_) => {
                         let mimeType = 'video/mp4; codecs="avc1.4D403D"';
                         if (!MS.isTypeSupported(mimeType))
@@ -955,14 +995,15 @@ function handle_messages(
                         sourceBuffer = mediaSource.addSourceBuffer(mimeType);
                         sourceBuffer.addEventListener("updateend", upd_buf);
                         // try to recover from errors by restarting the video
-                        if (sourceBuffer.onerror)
-                            sourceBuffer.onerror = () => settings.send_server_config();
+                        sourceBuffer.onerror = () => settings.send_server_config();
                     })
                 } else if (msg == "ConfigOk") {
                     onConfigOk();
                 }
             } else if (typeof msg == "object") {
-                if ("CapturableList" in msg)
+                if ("Hello" in msg) {
+                    log(LogLevel.INFO, "Server protocol version: " + msg["Hello"]["protocol_version"]);
+                } else if ("CapturableList" in msg)
                     onCapturableList(msg["CapturableList"]);
                 else if ("Error" in msg)
                     alert(msg["Error"]);
@@ -982,6 +1023,14 @@ function handle_messages(
         queue.push(event.data);
         upd_buf();
         frame_count += 1;
+
+        // Report buffer health to server for adaptive quality
+        health_frame_count++;
+        if (health_frame_count >= 30 && sourceBuffer && sourceBuffer.buffered.length > 0) {
+            health_frame_count = 0;
+            let buffer_seconds = sourceBuffer.buffered.end(0) - video.currentTime;
+            wsSend(JSON.stringify({"BufferHealth": {"buffer_seconds": buffer_seconds}}));
+        }
 
         // only seek if there is data available, some browsers choke otherwise
         if (video.seekable.length > 0) {
@@ -1031,6 +1080,7 @@ function init() {
         window.location.port + "/ws" + window.location.search
     );
     webSocket.binaryType = "arraybuffer";
+    activeWebSocket = webSocket;
 
     debug_overlay = document.getElementById("debug_overlay");
     settings = new Settings(webSocket);
@@ -1062,18 +1112,21 @@ function init() {
         // if document.exitFullscreen is not present we are probably running on iOS/iPadOS.
         // As input is broken in fullscreen mode on these, do not offer fullscreen in the first
         // place.
-        toggle_fullscreen_btn.parentElement.removeChild(toggle_fullscreen_btn);
+        toggle_fullscreen_btn.remove();
     }
 
-    let handle_disconnect = (msg: string) => {
-        document.body.onclick = video.onclick = (e) => {
-            e.stopPropagation();
-            if (window.confirm(msg + " Reload page?"))
-                location.reload();
-        }
+    let disconnected = false;
+    let handle_disconnect = () => {
+        if (disconnected) return;
+        disconnected = true;
+        let banner = document.createElement("div");
+        banner.style.cssText = "position:fixed;top:0;left:0;right:0;padding:1em;background:red;color:white;text-align:center;cursor:pointer;z-index:9999;font-size:1.2em;";
+        banner.textContent = "Disconnected from server. Click to reload.";
+        banner.onclick = () => location.reload();
+        document.body.appendChild(banner);
     }
-    webSocket.onerror = () => handle_disconnect("Lost connection.");
-    webSocket.onclose = () => handle_disconnect("Connection closed.");
+    webSocket.onerror = () => handle_disconnect();
+    webSocket.onclose = () => handle_disconnect();
     window.onresize = () => {
         stretch_video();
         canvas.width = window.innerWidth * window.devicePixelRatio;
@@ -1098,17 +1151,18 @@ function init() {
     );
     window.onunload = () => { webSocket.close(); }
     webSocket.onopen = function(event) {
-        webSocket.send('"GetCapturableList"');
+        wsSend(JSON.stringify({"Hello": {"protocol_version": 1}}));
+        wsSend('"GetCapturableList"');
         if (!settings.video_enabled())
-            webSocket.send('"PauseVideo"');
+            wsSend('"PauseVideo"');
 
         settings.send_server_config();
 
         document.onvisibilitychange = () => {
             if (document.hidden) {
-                webSocket.send('"PauseVideo"');
+                wsSend('"PauseVideo"');
             } else if (settings.video_enabled()) {
-                webSocket.send('"ResumeVideo"');
+                wsSend('"ResumeVideo"');
             }
         };
     }
@@ -1119,10 +1173,12 @@ function init() {
 // workaround
 function stretch_video() {
     let video = document.getElementById("video") as HTMLVideoElement;
+    let vw = video.clientWidth || 1;
+    let vh = video.clientHeight || 1;
     if (settings.stretched_video()) {
-        video.style.transform = "scaleX(" + document.body.clientWidth / video.clientWidth + ") scaleY(" + document.body.clientHeight / video.clientHeight + ")";
+        video.style.transform = "scaleX(" + document.body.clientWidth / vw + ") scaleY(" + document.body.clientHeight / vh + ")";
     } else {
-        let scale = Math.min(document.body.clientWidth / video.clientWidth, document.body.clientHeight / video.clientHeight);
+        let scale = Math.min(document.body.clientWidth / vw, document.body.clientHeight / vh);
         video.style.transform = "scale(" + scale + ")";
     }
 }
