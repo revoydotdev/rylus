@@ -1,0 +1,19 @@
+[package]
+name = "rylus-gui"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "FLTK GUI for Rylus"
+
+[dependencies]
+rylus-core = { workspace = true, features = ["gui"] }
+fltk = { version = "^1.5", features = ["use-wayland"] }
+fltk-theme = "^0.7.9"
+image = { version = "^0.25", features = ["png"], default-features = false }
+percent-encoding = "2.3"
+qrcode = "0.14.1"
+tracing = { workspace = true }
+
+[target.'cfg(not(target_os = "windows"))'.dependencies]
+pnet_datalink = "^0.35"

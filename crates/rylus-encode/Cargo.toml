@@ -1,0 +1,16 @@
+[package]
+name = "rylus-encode"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Video encoding for Rylus"
+
+[dependencies]
+rylus-core = { workspace = true }
+tracing = { workspace = true }
+
+[dependencies.ffmpeg-sys-next]
+version = "8"
+default-features = false
+features = ["avcodec", "avformat", "avfilter", "swscale", "swresample"]
