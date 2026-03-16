@@ -1,0 +1,45 @@
+[package]
+name = "rylus-server"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Rylus server binary - use your tablet as a graphic tablet"
+
+[[bin]]
+name = "rylus"
+path = "src/main.rs"
+
+[features]
+default = []
+bench = []
+gui = ["dep:rylus-gui", "rylus-core/gui"]
+x11 = ["rylus-capture/x11", "rylus-input/x11", "dep:rylus-ffi"]
+
+[dependencies]
+rylus-core = { workspace = true }
+rylus-ffi = { workspace = true, features = ["x11"], optional = true }
+rylus-capture = { workspace = true }
+rylus-encode = { workspace = true }
+rylus-input = { workspace = true }
+rylus-transport = { workspace = true }
+rylus-gui = { workspace = true, optional = true }
+
+bytes = "1.11"
+clap = { workspace = true }
+clap_complete = { workspace = true }
+fastwebsockets = { version = "0.10", features = ["upgrade", "unstable-split"] }
+handlebars = "^6.4"
+http-body-util = "0.1.3"
+hyper = { version = "^1.4", features = ["server", "http1", "http2"] }
+hyper-util = { version = "0.1.20", features = ["tokio"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+signal-hook = "0.3.17"
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+url = "^2.5"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+gstreamer = "^0.24"

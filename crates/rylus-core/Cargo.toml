@@ -1,0 +1,25 @@
+[package]
+name = "rylus-core"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Core types and protocol definitions for Rylus"
+
+[features]
+default = []
+gui = ["dep:fltk", "dep:fltk-theme"]
+
+[dependencies]
+bitflags = { workspace = true }
+clap = { workspace = true }
+clap_complete = { workspace = true }
+dirs = "^5.0"
+serde = { workspace = true }
+serde_json = { workspace = true }
+toml = "^0.9"
+tracing = { workspace = true }
+
+# GUI-optional dependencies
+fltk = { version = "^1.5", features = ["use-wayland"], optional = true }
+fltk-theme = { version = "^0.7.9", optional = true }
