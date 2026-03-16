@@ -84,6 +84,13 @@ input[type='range']::-webkit-slider-runnable-track, input[type="range"]::-moz-ra
     font-family: sans-serif;
     transition: transform 0.5s, opacity 0.5s;
 }
+@media (max-width: 480px) {
+    #settings {
+        width: 100%;
+        right: 0;
+        padding: 0.5em;
+    }
+}
 #settings.lefty {
     left: 0;
     right: auto;
@@ -121,7 +128,7 @@ input[type='range']::-webkit-slider-runnable-track, input[type="range"]::-moz-ra
 }
 #settings h3 {
     font-size: 1em;
-    margin-top: 0.2;
+    margin-top: 0.2em;
     text-align: center;
 }
 #settings section {
@@ -206,4 +213,8 @@ label input:disabled + span {
 }
 #debug_overlay span.updated {
     color: darkgreen;
+}
+:focus-visible {
+    outline: 2px solid #00aaff;
+    outline-offset: 2px;
 }
