@@ -1,4 +1,5 @@
 /.vscode
+/.playwright-mcp
 /target
 /deps/ffmpeg
 /deps/x264
