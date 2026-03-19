@@ -58,18 +58,20 @@ impl Rylus {
             sender_ui,
             sender_startup,
             self.notify_shutdown.clone(),
-            WebServerConfig {
-                bind_addr: SocketAddr::new(config.bind_address, config.web_port),
-                access_code: config.access_code.clone(),
-                custom_index_html: config.custom_index_html.clone(),
-                custom_access_html: config.custom_access_html.clone(),
-                custom_style_css: config.custom_style_css.clone(),
-                custom_lib_js: config.custom_lib_js.clone(),
-                #[cfg(target_os = "linux")]
-                enable_custom_input_areas: config.wayland_support,
-                #[cfg(not(target_os = "linux"))]
-                enable_custom_input_areas: false,
-            },
+            WebServerConfig::new(
+                SocketAddr::new(config.bind_address, config.web_port),
+                config.access_code.clone(),
+                config.custom_index_html.clone(),
+                config.custom_access_html.clone(),
+                config.custom_style_css.clone(),
+                config.custom_lib_js.clone(),
+                {
+                    #[cfg(target_os = "linux")]
+                    { config.wayland_support }
+                    #[cfg(not(target_os = "linux"))]
+                    { false }
+                },
+            ),
             RylusClientConfig {
                 encoder_options,
                 #[cfg(target_os = "linux")]
