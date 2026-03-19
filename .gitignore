@@ -1,6 +1,8 @@
 /.vscode
 /.playwright-mcp
 /target
+/Rylus
+/node_modules
 /deps/ffmpeg
 /deps/x264
 /deps/dist*
