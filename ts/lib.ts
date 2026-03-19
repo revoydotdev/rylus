@@ -1085,7 +1085,7 @@ function init() {
     let protocol = document.location.protocol == "https:" ? "wss://" : "ws://";
     let webSocket = new WebSocket(
         protocol + window.location.hostname + ":" +
-        window.location.port + "/ws" + window.location.search
+        window.location.port + "/ws"
     );
     webSocket.binaryType = "arraybuffer";
     activeWebSocket = webSocket;
