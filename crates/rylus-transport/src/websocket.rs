@@ -3,10 +3,18 @@ use hyper::upgrade::Upgraded;
 use hyper_util::rt::TokioIo;
 use std::convert::Infallible;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::mpsc::channel;
 use tracing::warn;
 
 use rylus_core::protocol::{MessageInbound, MessageOutbound, RylusReceiver, RylusSender};
+
+/// Maximum size of a text WebSocket frame (control messages).
+/// Binary frames (video) are not limited.
+const MAX_TEXT_FRAME_SIZE: usize = 64 * 1024; // 64 KB
+
+/// Idle timeout: close the connection if no message is received within this duration.
+const IDLE_TIMEOUT: Duration = Duration::from_secs(60);
 
 pub struct WsRylusReceiver {
     recv: tokio::sync::mpsc::Receiver<MessageInbound>,
@@ -30,6 +38,10 @@ pub enum WsMessage {
     MessageOutbound(MessageOutbound),
 }
 
+// SAFETY: WsMessage contains Frame<'static> which holds a Payload (Bytes or Vec<u8>),
+// both of which are Send. The other variants (Video, MessageOutbound) are trivially Send.
+// Frame is not marked Send by fastwebsockets because it can hold borrowed data, but
+// we only construct Frame<'static> with owned data here.
 unsafe impl Send for WsMessage {}
 
 #[derive(Clone)]
@@ -78,6 +90,10 @@ pub fn rylus_websocket_channel(
 
                 let frame = tokio::select! {
                     _ = semaphore_shutdown.acquire() => break,
+                    _ = tokio::time::sleep(IDLE_TIMEOUT) => {
+                        warn!("WebSocket idle timeout ({IDLE_TIMEOUT:?}) — closing connection.");
+                        break;
+                    },
                     frame = fut => match frame {
                         Ok(frame) => frame,
                         Err(err) => {
@@ -88,14 +104,23 @@ pub fn rylus_websocket_channel(
                 };
                 match frame.opcode {
                     OpCode::Close => break,
-                    OpCode::Text => match serde_json::from_slice(&frame.payload) {
-                        Ok(msg) => {
-                            if let Err(err) = sender_inbound.send(msg).await {
-                                warn!("Failed to forward inbound message to RylusClientHandler: {err}.");
-                            }
+                    OpCode::Text => {
+                        if frame.payload.len() > MAX_TEXT_FRAME_SIZE {
+                            warn!(
+                                "Text frame too large ({} bytes, max {MAX_TEXT_FRAME_SIZE}) — dropping.",
+                                frame.payload.len()
+                            );
+                            continue;
                         }
-                        Err(err) => warn!("Failed to parse message: {err}"),
-                    },
+                        match serde_json::from_slice(&frame.payload) {
+                            Ok(msg) => {
+                                if let Err(err) = sender_inbound.send(msg).await {
+                                    warn!("Failed to forward inbound message to RylusClientHandler: {err}.");
+                                }
+                            }
+                            Err(err) => warn!("Failed to parse message: {err}"),
+                        }
+                    }
                     _ => {}
                 }
             }
