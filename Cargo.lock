@@ -2003,7 +2003,7 @@ dependencies = [
 
 [[package]]
 name = "rylus-capture"
-version = "0.13.0"
+version = "0.14.0"
 dependencies = [
  "captrs",
  "core-foundation",
@@ -2022,7 +2022,7 @@ dependencies = [
 
 [[package]]
 name = "rylus-core"
-version = "0.13.0"
+version = "0.14.0"
 dependencies = [
  "bitflags",
  "clap",
@@ -2038,7 +2038,7 @@ dependencies = [
 
 [[package]]
 name = "rylus-encode"
-version = "0.13.0"
+version = "0.14.0"
 dependencies = [
  "ffmpeg-sys-next",
  "rylus-core",
@@ -2047,7 +2047,7 @@ dependencies = [
 
 [[package]]
 name = "rylus-ffi"
-version = "0.13.0"
+version = "0.14.0"
 dependencies = [
  "cc",
  "rylus-core",
@@ -2055,7 +2055,7 @@ dependencies = [
 
 [[package]]
 name = "rylus-gui"
-version = "0.13.0"
+version = "0.14.0"
 dependencies = [
  "fltk",
  "fltk-theme",
@@ -2069,7 +2069,7 @@ dependencies = [
 
 [[package]]
 name = "rylus-input"
-version = "0.13.0"
+version = "0.14.0"
 dependencies = [
  "enigo",
  "evdev",
@@ -2081,7 +2081,7 @@ dependencies = [
 
 [[package]]
 name = "rylus-server"
-version = "0.13.0"
+version = "0.14.0"
 dependencies = [
  "argon2",
  "bytes",
@@ -2112,7 +2112,7 @@ dependencies = [
 
 [[package]]
 name = "rylus-transport"
-version = "0.13.0"
+version = "0.14.0"
 dependencies = [
  "fastwebsockets",
  "hyper",
