@@ -1,16 +1,17 @@
 # Rylus
-![Build](https://github.com/H-M-H/Weylus/workflows/Build/badge.svg)
 
-Rylus turns your tablet or smart phone into a graphic tablet/touch screen for your computer!
+![Build](https://github.com/revelri/Rylus/workflows/Build/badge.svg)
 
-Rylus in action with [Xournal++](https://github.com/xournalpp/xournalpp):
+Rylus turns your tablet or smartphone into a graphic tablet/touch screen for your computer.
 
-![Rylus in action](docs/In_action.gif)
-
-> **Note:** Rylus is a fork of [H-M-H/Weylus](https://github.com/H-M-H/Weylus).
+> Rylus is a fork of [H-M-H/Weylus](https://github.com/H-M-H/Weylus), rewritten with a pure Rust
+> architecture. All C/C++ code has been replaced with native Rust crates, GStreamer has been replaced
+> with direct PipeWire bindings, FLTK with egui, and the monolith has been refactored into a
+> 7-crate Cargo workspace.
 
 ## Table of Contents
 * [Features](#features)
+* [Architecture](#architecture)
 * [Installation](#installation)
     * [Packages](#packages)
 * [Running](#running)
@@ -41,8 +42,12 @@ Rylus in action with [Xournal++](https://github.com/xournalpp/xournalpp):
 - Mirror your screen to your tablet
 - Send keyboard input using physical keyboards
 - Hardware accelerated video encoding
+- Pure Rust codebase — no custom C/C++ code
+- Native desktop GUI built with [egui](https://github.com/emilk/egui)
+- WebSocket auto-reconnect with exponential backoff
+- Access code authentication with argon2 hashing and rate limiting
 
-The above features are available on all Operating Systems but Rylus works best on Linux. Additional
+The above features are available on all operating systems but Rylus works best on Linux. Additional
 features on Linux are:
 - Support for a stylus/pen (supports pressure and tilt)
 - Multi-touch: Try it with software that supports multi-touch, like Krita, and see for yourself!
@@ -50,25 +55,38 @@ features on Linux are:
 - Faster screen mirroring
 - Tablet as second screen
 
+## Architecture
+
+Rylus is organized as a Cargo workspace with seven crates:
+
+| Crate | Purpose |
+|-------|---------|
+| **rylus-core** | Config, protocol definitions, error types, pixel formats, traits |
+| **rylus-capture** | Screen capture backends (X11 via x11rb, PipeWire for Wayland, CoreGraphics, Windows GDI) |
+| **rylus-encode** | Video encoding via FFmpeg (H.264, fMP4 container) |
+| **rylus-input** | Input device backends (Linux uinput/evdev, Windows WinRT, macOS enigo) |
+| **rylus-transport** | WebSocket transport layer |
+| **rylus-gui** | Desktop GUI (egui/eframe) |
+| **rylus-server** | HTTP/WebSocket server, session management, main binary |
+
 ## Installation
-Just grab the latest release for your OS from the
-[releases page](https://github.com/H-M-H/Weylus/releases) and install it on your computer. No apps
-except a modern browser (Firefox 80+, iOS/iPadOS 13+) are required on your tablet. **If you run
-Linux make sure to follow the instructions described [here](#linux) to enable uinput for features
-like pressure sensitivity and multitouch!**
+Grab the latest release for your OS from the
+[releases page](https://github.com/revelri/Rylus/releases) and install it on your computer. No apps
+except a modern browser (Firefox 80+, Safari on iOS/iPadOS 13+) are required on your tablet. **If
+you run Linux make sure to follow the instructions described [here](#linux) to enable uinput for
+features like pressure sensitivity and multitouch!**
 
 ### Packages
-AUR packages for Rylus are available here:
+AUR packages are available:
 - From source: [weylus](https://aur.archlinux.org/packages/weylus/)
 - Prebuilt binary: [weylus-bin](https://aur.archlinux.org/packages/weylus-bin/)
 
 ## Running
-Start Rylus, preferably set an access code in the access code box and press the Start button. This
-will start a webserver running on your computer. To control your computer with your tablet you need
-to open the url `http://<address of your computer>:<port set in the menu, default is 1701>`, if
-possible Rylus will display to you the url you need to open and show a QR code with the encoded
-address. If you have a firewall running make sure to open a TCP port for the webserver (1701 by
-default) and the websocket connection (9001 by default).
+Start Rylus, optionally set an access code in the settings panel, and press Start. This starts a
+webserver on your computer. To control your computer with your tablet, open
+`http://<address of your computer>:<port, default 1701>` in a browser on your tablet. Rylus displays
+the URL and a QR code you can scan. If you have a firewall, open TCP ports for the webserver (1701
+by default) and the websocket connection (9001 by default).
 
 On many Linux distributions this is done with ufw:
 ```
@@ -76,7 +94,8 @@ sudo ufw allow 1701/tcp
 sudo ufw allow 9001/tcp
 ```
 
-Please only run Rylus in networks you trust as there is no encryption to enable minimal latencies.
+Rylus supports access code authentication (hashed with argon2, rate-limited) but does not use TLS
+by default. Only run on networks you trust, or set up a TLS proxy (see [Encryption](#encryption)).
 
 ### Fullscreen
 You may want to add a bookmark to your home screen on your tablet as this enables running Rylus in
@@ -89,12 +108,11 @@ connect it to your tablet and start typing. Due to technical limitations onscree
 supported.
 
 ### Automation
-Rylus provides some features to make automation as convenient as possible. There is a command-line
-interface; `--no-gui` for example starts Rylus in headless mode without a gui. For more options see
-`rylus --help`. If you want to run a specific script e.g., once a client connects to your computer
-you can do so by parsing the log Rylus generates. You may want to enable more verbose logging by
-setting the environment variable `RYLUS_LOG_LEVEL` to `DEBUG` or `TRACE` as well as
-`RYLUS_LOG_JSON` to `true` to enable easily parseable JSON logging.
+Rylus provides a command-line interface; `--no-gui` starts Rylus in headless mode. For more options
+see `rylus --help`. Configuration is stored in `~/.config/rylus/rylus.toml`.
+
+You can enable more verbose logging by setting the environment variable `RYLUS_LOG_LEVEL` to
+`DEBUG` or `TRACE` as well as `RYLUS_LOG_JSON` to `true` for JSON logging.
 
 ### Linux
 Rylus uses the `uinput` interface to simulate input events on Linux. **To enable stylus and
@@ -124,12 +142,11 @@ This allows your user to synthesize input events system-wide, even when another 
 Therefore, untrusted users should not be added to the uinput group.
 
 #### Wayland
-Rylus offers experimental support for Wayland. Installing `pipewire` and `xdg-desktop-portal` as
-well as one of:
+Rylus supports Wayland via direct PipeWire bindings and the xdg-desktop-portal. Install `pipewire`
+and `xdg-desktop-portal` as well as one of:
 - `xdg-desktop-portal-gtk` for GNOME
 - `xdg-desktop-portal-kde` for KDE
 - `xdg-desktop-portal-wlr` for wlroots-based compositors like Sway
-is required.
 
 There are still some things that do not work:
 - input mapping for windows
@@ -152,9 +169,8 @@ set. If VAAPI doesn't work out of the box for you, have a look into `/dev/dri`, 
 `RYLUS_VAAPI_DEVICE=/dev/dri/renderD129` is already the solution. Note that you may need to install
 the driver(s) first.
 
-Nvidias NVENC is very fast but delivers a video stream of noticeably lower quality (at least on my
-GeForce GTX 1050 Mobile GPU) but more recent GPUs should provide higher quality. For this to work
-nvidia drivers need to be installed.
+Nvidia's NVENC is very fast but may deliver a video stream of lower quality on older GPUs. More
+recent GPUs should provide higher quality. Nvidia drivers need to be installed.
 
 #### Rylus as Second Screen
 There are a few possibilities to use Rylus to turn your tablet into a second screen.
@@ -240,10 +256,6 @@ that prevents users from accepting self-signed certificates for websocket connec
 is to directly open the websocket connection via the URL bar and accept the certificate there. After
 accepting the connection will of course fail as the browser expects https and not wss as protocol.
 
-Sadly this solution is anything but frictionless and I am unhappy with the current state of affairs.
-This is also another reason why encryption is not enabled by default, self-signed certificates are
-just too painful to handle nowadays. I'd gladly welcome any proposals to improve the situation!
-
 ### macOS
 Rylus needs some permissions to work properly, make sure you enable:
 - Incoming connections
@@ -251,101 +263,93 @@ Rylus needs some permissions to work properly, make sure you enable:
 - Controlling your desktop
 
 #### Hardware Acceleration
-Rylus can make use of the Videotoolbox framework on macOS for hardware acceleration. In my tests
-the video quality has been considerably worse than that using software encoding and thus
-Videotoolbox is disabled by default.
+Rylus can make use of the VideoToolbox framework on macOS for hardware acceleration. Video quality
+may be worse than software encoding, so VideoToolbox is disabled by default.
 
 ### Windows
 
 #### Hardware Acceleration
-Rylus can make use of Nvidias NVENC as well as Microsoft's MediaFoundation for hardware accelerated
+Rylus can make use of Nvidia's NVENC as well as Microsoft's MediaFoundation for hardware accelerated
 video encoding. Due to widely varying quality it is disabled by default.
 
 ## Building
-To build Rylus you need to install Rust, Typescript, make, git, a C compiler, nasm and bash. `cargo
-build` builds the project. By default Rylus is build in debug mode, if you want a release build run
-`cargo build --release`. On Linux some additional dependencies are required to build Rylus. On
-Debian or Ubuntu they can be installed via:
+To build Rylus you need Rust, TypeScript, make, git, a C compiler, nasm, and bash. `cargo build`
+builds the project. For a release build run `cargo build --release`.
+
+On Linux the following dependencies are required:
+
+**Debian/Ubuntu:**
 ```sh
-apt-get install -y libx11-dev libxext-dev libxft-dev libxinerama-dev libxcursor-dev libxrender-dev \
-libxfixes-dev libxtst-dev libxrandr-dev libxcomposite-dev libxi-dev libxv-dev autoconf libtool-bin \
-nvidia-cuda-dev pkg-config libdrm-dev libpango1.0-dev libgstreamer1.0-dev \
-libgstreamer-plugins-base1.0-dev libdbus-1-dev
+sudo apt-get install -y \
+  libpipewire-0.3-dev libdbus-1-dev \
+  libavcodec-dev libavformat-dev libavfilter-dev libavutil-dev \
+  libswscale-dev libswresample-dev \
+  libwayland-dev libxkbcommon-dev libdrm-dev libva-dev \
+  pkg-config clang nasm
 ```
 
-On Fedora, they can be installed via:
+**Fedora:**
 ```sh
-sudo dnf install libXext-devel libXft-devel libXinerama-devel libXcursor-devel libXrender-devel \
-libXfixes-devel libXtst-devel libXrandr-devel libXcomposite-devel libXi-devel libXv-devel autoconf libtool \
-pkg-config libdrm-devel pango-devel gstreamer1-devel \
-gstreamer1-plugins-base-devel dbus-devel nasm npm
+sudo dnf install pipewire-devel dbus-devel \
+  ffmpeg-devel libdrm-devel libva-devel \
+  wayland-devel libxkbcommon-devel \
+  pkg-config clang nasm npm
 ```
-After npm is installed, typescript must be installed by:
+
+**Arch Linux:**
+```sh
+sudo pacman -S pipewire ffmpeg libva libdrm \
+  wayland libxkbcommon pkg-config clang nasm
+```
+
+After npm is installed, TypeScript must be installed:
 ```sh
 sudo npm install typescript -g
 ```
-
-Rylus requires FFmpeg development libraries to be installed on your system. Install them via your
-package manager:
-
-- **Arch Linux:** `sudo pacman -S ffmpeg`
-- **Ubuntu/Debian:** `sudo apt install libavcodec-dev libavformat-dev libavfilter-dev libswscale-dev libswresample-dev libavutil-dev`
-- **Fedora:** `sudo dnf install ffmpeg-devel`
-- **macOS:** `brew install ffmpeg`
-- **Windows:** Install FFmpeg dev libraries and ensure pkg-config can find them.
 
 On Windows only msvc is supported as C compiler.
 
 ### Docker
 It is also possible to build the Linux version inside a docker container. The Dockerfile used is
-located at [docker/Dockerfile](docker/Dockerfile). This is also how the official release is built.
-Building works like
-this:
+located at [docker/Dockerfile](docker/Dockerfile). Building works like this:
 ```console
 docker run -it hhmhh/weylus_build bash
-root@f02164dbfa18:/# git clone https://github.com/H-M-H/Weylus
-Cloning into 'Weylus'...
-remote: Enumerating objects: 10, done.
-remote: Counting objects: 100% (10/10), done.
-remote: Compressing objects: 100% (7/7), done.
-remote: Total 827 (delta 1), reused 6 (delta 0), pack-reused 817
-Receiving objects: 100% (827/827), 5.38 MiB | 7.12 MiB/s, done.
-Resolving deltas: 100% (431/431), done.
-root@f02164dbfa18:/# cd Weylus/
-root@f02164dbfa18:/Weylus# cargo deb
-   Compiling
-   ...
+root@container:/# git clone https://github.com/revelri/Rylus
+root@container:/# cd Rylus/
+root@container:/Rylus# cargo deb
 ```
-Once the build is finished you can for example copy the binary from the container to your file
-system like this:
+Once the build is finished you can copy the binary from the container to your file system:
 ```sh
-docker cp f02164dbfa18:/Weylus/target/release/rylus ~/some/path/rylus
+docker cp <container-id>:/Rylus/target/release/rylus ~/some/path/rylus
 ```
-The .deb is located at `/Weylus/target/debian/`.  Please note that the container ID will most likely
-not be `f02164dbfa18` if you run this yourself, replace it accordingly.
+The .deb is located at `/Rylus/target/debian/`.
 
 ## How does this work?
 ### Stylus/Touch
-Modern browsers expose so called
-[PointerEvents](https://developer.mozilla.org/en-US/docs/Web/API/PointerEvent) that can convey not
-only mouse but additionally stylus/pen and touch information. Rylus sets up a webserver with the
-corresponding javascript code to capture these events. The events are sent back to the server using
-websockets.
-Rylus then processes these events using either the generic OS independent backend, which only
-supports controlling the mouse or on Linux the uinput backend can be used. It makes use of the
-uinput Linux kernel module which supports creating a wide range of input devices including mouse,
-stylus and touch input devices.
+Modern browsers expose
+[PointerEvents](https://developer.mozilla.org/en-US/docs/Web/API/PointerEvent) that convey not
+only mouse but additionally stylus/pen and touch information. Rylus sets up a webserver with
+TypeScript code to capture these events. The events are sent back to the server via WebSockets
+(with auto-reconnect and exponential backoff).
+
+Rylus then processes these events using either the generic OS-independent backend (mouse control
+only) or on Linux the uinput backend, which uses the uinput kernel module to create a wide range
+of input devices including mouse, stylus, and touch input devices.
 
 ### Screen mirroring & window capturing
-Either the generic backend is used which is less efficient and only captures the whole screen or on
-Linux xlib is used to connect to the X-server and do the necessary work of getting window
-information and capturing the window/screen. To make things fast the "MIT-SHM - The MIT Shared
-Memory Extension" is used to create shared memory images using `XShmCreateImage`. If Wayland instead
-of X11 is running, PipeWire and GStreamer is used to capture the screen. The images captured are
-then encoded to a video stream using ffmpeg. Fragmented MP4 is used as container format to enable
-browsers to play the stream via the Media Source Extensions API. The video codec used is H.264 as
-this is widely supported and allows very fast encoding as opposed to formats like AV1. To minimize
-dependencies ffmpeg is statically linked into Rylus.
+On Linux, Rylus uses [x11rb](https://github.com/psychon/x11rb) to connect to the X server for
+window information and screen capture. The MIT-SHM extension provides shared memory images via
+`XShmCreateImage` for fast capture. On Wayland, [pipewire-rs](https://gitlab.freedesktop.org/pipewire/pipewire-rs)
+captures the screen directly through the xdg-desktop-portal, without the GStreamer dependency chain
+that the original Weylus required.
+
+On macOS, CoreGraphics handles screen capture. On Windows, GDI capture is used via Microsoft's
+official [windows](https://github.com/microsoft/windows-rs) crate.
+
+Captured images are encoded to an H.264 video stream using FFmpeg (via ffmpeg-sys-next). Fragmented
+MP4 is used as the container format to enable browsers to play the stream via the Media Source
+Extensions API. H.264 is used for its wide support and fast encoding. FFmpeg is statically linked
+into the binary.
 
 ## FAQ
 Q: Why does the page not load on my tablet and instead I get a timeout?<br>
@@ -360,8 +364,8 @@ Q: Why is the "Capture" drop down empty and the screen not mirrored?<br>
 A: It is possible that only the port for the webserver but not the websocket has been opened, check
 that both ports have been opened.
 
-Q: Why can I not select any windows in the "Capture" drop down and only see the whole screen.<br>
-A: If you are running Rylus on MacOS or Windows this feature is unfortunately not implemented. On
+Q: Why can I not select any windows in the "Capture" drop down and only see the whole screen?<br>
+A: If you are running Rylus on macOS or Windows this feature is unfortunately not implemented. On
 Linux it is possible that your window manager does not support
 [Extended Window Manager Hints](https://specifications.freedesktop.org/wm-spec/latest/) or that you
 need to activate them first, like for XMonad.
@@ -379,9 +383,6 @@ A: Actually it does, just make sure Firefox version 80+ is installed.
 Q: Why does this not run under Chrome on my iPad?<br>
 A: Chrome lacks some features for video streaming on iPadOS/iOS, try Firefox or Safari.
 
-Q: Why won't my cursor move in osu! ?<br>
-A: Try disabling raw input.
-
 Q: Can I use Rylus even if there is no WiFi?<br>
 A: Probably yes! Most tablets permit setting up a WiFi hotspot that can be used to connect your
 computer and tablet. Alternatively there is USB tethering too, which can be used to setup a peer to
@@ -394,8 +395,8 @@ adb reverse tcp:9001 tcp:9001
 ```
 Like that you can connect from your Android device to Rylus with the URL: `http://127.0.0.1:1701`.
 
-Rylus only requires that your devices
-are connected via the Internet Protocol and that doesn't necessarily imply WiFi.
+Rylus only requires that your devices are connected via the Internet Protocol and that doesn't
+necessarily imply WiFi.
 
 ---
 
