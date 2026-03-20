@@ -1123,16 +1123,161 @@ function init() {
         toggle_fullscreen_btn.remove();
     }
 
-    let disconnected = false;
-    let handle_disconnect = () => {
-        if (disconnected) return;
-        disconnected = true;
-        let banner = document.createElement("div");
-        banner.style.cssText = "position:fixed;top:0;left:0;right:0;padding:1em;background:red;color:white;text-align:center;cursor:pointer;z-index:9999;font-size:1.2em;";
-        banner.textContent = "Disconnected from server. Click to reload.";
-        banner.onclick = () => location.reload();
-        document.body.appendChild(banner);
+    // Reconnection state machine
+    const RECONNECT_MAX_ATTEMPTS = 10
+    const RECONNECT_BASE_DELAY = 1000
+    const RECONNECT_MAX_DELAY = 30000
+    let reconnect_attempt = 0
+    let reconnect_timer: number | null = null
+    let reconnect_countdown_timer: number | null = null
+    let reconnect_banner: HTMLDivElement | null = null
+    let is_reconnecting = false
+    let is_connected = false
+
+    function remove_reconnect_banner() {
+        if (reconnect_banner) {
+            reconnect_banner.remove()
+            reconnect_banner = null
+        }
+        if (reconnect_countdown_timer !== null) {
+            clearInterval(reconnect_countdown_timer)
+            reconnect_countdown_timer = null
+        }
+        if (reconnect_timer !== null) {
+            clearTimeout(reconnect_timer)
+            reconnect_timer = null
+        }
     }
+
+    function show_reconnect_banner(delay_ms: number, attempt: number) {
+        remove_reconnect_banner()
+        let banner = document.createElement("div")
+        banner.style.cssText = "position:fixed;top:0;left:0;right:0;padding:1em;background:#d97706;color:white;text-align:center;z-index:9999;font-size:1.2em;display:flex;align-items:center;justify-content:center;gap:1em;"
+        let msg = document.createElement("span")
+        let remaining = Math.ceil(delay_ms / 1000)
+        msg.textContent = "Reconnecting in " + remaining + "s... (attempt " + attempt + " of " + RECONNECT_MAX_ATTEMPTS + ")"
+        banner.appendChild(msg)
+        let btn = document.createElement("button")
+        btn.textContent = "Retry Now"
+        btn.style.cssText = "padding:0.3em 1em;cursor:pointer;border:none;background:white;color:#d97706;border-radius:4px;font-weight:bold;"
+        btn.onclick = () => {
+            remove_reconnect_banner()
+            attempt_reconnect()
+        }
+        banner.appendChild(btn)
+        document.body.appendChild(banner)
+        reconnect_banner = banner
+
+        reconnect_countdown_timer = window.setInterval(() => {
+            remaining--
+            if (remaining < 1) remaining = 1
+            msg.textContent = "Reconnecting in " + remaining + "s... (attempt " + attempt + " of " + RECONNECT_MAX_ATTEMPTS + ")"
+        }, 1000)
+    }
+
+    function show_failed_banner() {
+        remove_reconnect_banner()
+        let banner = document.createElement("div")
+        banner.style.cssText = "position:fixed;top:0;left:0;right:0;padding:1em;background:red;color:white;text-align:center;cursor:pointer;z-index:9999;font-size:1.2em;"
+        banner.textContent = "Could not reconnect. Click to reload."
+        banner.onclick = () => location.reload()
+        document.body.appendChild(banner)
+        reconnect_banner = banner
+    }
+
+    function calc_reconnect_delay(attempt: number): number {
+        let delay = RECONNECT_BASE_DELAY * Math.pow(2, attempt - 1)
+        return Math.min(delay, RECONNECT_MAX_DELAY)
+    }
+
+    function schedule_reconnect() {
+        reconnect_attempt++
+        if (reconnect_attempt > RECONNECT_MAX_ATTEMPTS) {
+            is_reconnecting = false
+            show_failed_banner()
+            return
+        }
+        let delay = calc_reconnect_delay(reconnect_attempt)
+        show_reconnect_banner(delay, reconnect_attempt)
+        reconnect_timer = window.setTimeout(() => {
+            reconnect_timer = null
+            attempt_reconnect()
+        }, delay)
+    }
+
+    function attempt_reconnect() {
+        remove_reconnect_banner()
+        let banner = document.createElement("div")
+        banner.style.cssText = "position:fixed;top:0;left:0;right:0;padding:1em;background:#d97706;color:white;text-align:center;z-index:9999;font-size:1.2em;"
+        banner.textContent = "Reconnecting... (attempt " + reconnect_attempt + " of " + RECONNECT_MAX_ATTEMPTS + ")"
+        document.body.appendChild(banner)
+        reconnect_banner = banner
+
+        let protocol = document.location.protocol == "https:" ? "wss://" : "ws://"
+        let newSocket = new WebSocket(
+            protocol + window.location.hostname + ":" +
+            window.location.port + "/ws"
+        )
+        newSocket.binaryType = "arraybuffer"
+
+        newSocket.onerror = () => {
+            // onclose will fire after onerror, so reconnect is handled there
+        }
+
+        newSocket.onclose = () => {
+            if (newSocket !== activeWebSocket) return
+            if (!is_reconnecting) {
+                is_reconnecting = true
+                reconnect_attempt = 0
+            }
+            schedule_reconnect()
+        }
+
+        newSocket.onopen = () => {
+            // Reconnect succeeded
+            activeWebSocket = newSocket
+            webSocket = newSocket
+            settings.webSocket = newSocket
+            reconnect_attempt = 0
+            is_reconnecting = false
+            remove_reconnect_banner()
+
+            // Re-send handshake and config
+            wsSend(JSON.stringify({"Hello": {"protocol_version": 1}}))
+            wsSend('"GetCapturableList"')
+            if (!settings.video_enabled())
+                wsSend('"PauseVideo"')
+            settings.send_server_config()
+
+            // Re-wire message handling and input handlers
+            handle_messages(newSocket, video, () => {
+                new KeyboardHandler(newSocket)
+                new PointerHandler(newSocket)
+            },
+                (err) => alert(err),
+                (window_names) => settings.onCapturableList(window_names)
+            )
+
+            document.onvisibilitychange = () => {
+                if (document.hidden) {
+                    wsSend('"PauseVideo"')
+                } else if (settings.video_enabled()) {
+                    wsSend('"ResumeVideo"')
+                }
+            }
+        }
+
+        activeWebSocket = newSocket
+        webSocket = newSocket
+    }
+
+    let handle_disconnect = () => {
+        if (is_reconnecting) return
+        is_reconnecting = true
+        reconnect_attempt = 0
+        schedule_reconnect()
+    }
+
     webSocket.onerror = () => handle_disconnect();
     webSocket.onclose = () => handle_disconnect();
     window.onresize = () => {
@@ -1146,7 +1291,6 @@ function init() {
     video.controls = false;
     video.disableRemotePlayback = true;
     video.onloadeddata = () => stretch_video();
-    let is_connected = false;
     handle_messages(webSocket, video, () => {
         if (!is_connected) {
             new KeyboardHandler(webSocket);
