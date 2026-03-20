@@ -2,6 +2,9 @@
 
 set -ex
 
+# install JS build dependencies (esbuild for TypeScript compilation)
+npm install
+
 # cross compile windows version
 cargo build --target x86_64-pc-windows-gnu --release
 

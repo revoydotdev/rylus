@@ -6,7 +6,7 @@ RUN apk add --no-cache \
     dbus-dev cmake build-base nasm npm ffmpeg-dev libva-dev curl git bash automake tar clang \
     wayland-dev libxkbcommon-dev
 
-RUN npm install --global typescript
+RUN npm install --global esbuild
 
 RUN ln -s /usr/bin/x86_64-alpine-linux-musl-gcc /usr/bin/musl-gcc
 RUN ln -s /usr/bin/x86_64-alpine-linux-musl-g++ /usr/bin/musl-g++

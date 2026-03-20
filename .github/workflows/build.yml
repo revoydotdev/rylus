@@ -24,6 +24,10 @@ jobs:
           libwayland-dev libxkbcommon-dev \
           libdrm-dev libva-dev \
           pkg-config clang nasm
+    - uses: actions/setup-node@v4
+      with:
+        node-version: 22
+    - run: npm install
     - uses: dtolnay/rust-toolchain@stable
       with:
         components: clippy, rustfmt
@@ -107,6 +111,8 @@ jobs:
           ~/.cargo/git
           target
         key: ${{ runner.os }}-alpine-cargo-${{ hashFiles('Cargo.lock') }}
+    - name: Install JS deps
+      run: npm install
     - name: Build
       run: RUSTFLAGS='-C target-feature=-crt-static' cargo build --release && cd target/release && tar czf rylus-linux-alpine-musl.tar.gz rylus
       shell: bash
@@ -146,7 +152,7 @@ jobs:
         key: ${{ runner.os }}-cargo-${{ hashFiles('Cargo.lock') }}
     - name: Download deps
       run: |
-        npm install -g typescript
+        npm install
         brew install nasm
         cargo install cargo-bundle
       shell: bash
