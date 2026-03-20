@@ -2,7 +2,7 @@ use std::sync::mpsc::RecvTimeoutError;
 use std::sync::mpsc;
 use std::thread::{spawn, JoinHandle};
 use std::time::{Duration, Instant};
-use tracing::{error, trace, warn};
+use tracing::{error, info, trace, warn};
 
 use rylus_capture::{get_capturables, Capturable, Recorder};
 use rylus_core::error::CErrorCode;
@@ -436,6 +436,11 @@ fn handle_video<S: RylusSender + Clone + Send + 'static>(
     let mut enc_width_out: usize = 0;
     let mut enc_height_out: usize = 0;
 
+    // Frame drop metrics
+    let mut frames_total: u64 = 0;
+    let mut frames_dropped: u64 = 0;
+    let mut last_stats_log = Instant::now();
+
     loop {
         let now = Instant::now();
         let elapsed = now.saturating_duration_since(last_frame);
@@ -445,6 +450,8 @@ fn handle_video<S: RylusSender + Clone + Send + 'static>(
 
         if frames_passed > 0 {
             trace!("Dropped {frames_passed} frame(s) (pacing)!");
+            frames_dropped += frames_passed as u64;
+            frames_total += frames_passed as u64;
         }
 
         match receiver.recv_timeout(if paused { EFFECTIVE_INFINITY } else { timeout }) {
@@ -562,18 +569,32 @@ fn handle_video<S: RylusSender + Clone + Send + 'static>(
                 let capture_elapsed = capture_start.elapsed().as_secs_f64();
 
                 // try_send: if encoder is busy, drop this frame
+                frames_total += 1;
                 match encode_tx.try_send(EncodeCommand::Frame(owned)) {
                     Ok(()) => {
                         // Track capture time for adaptive quality
                         encode_time_avg = 0.3 * capture_elapsed + 0.7 * encode_time_avg;
                     }
                     Err(mpsc::TrySendError::Full(_)) => {
+                        frames_dropped += 1;
                         trace!("Dropped frame (encoder busy)");
                     }
                     Err(mpsc::TrySendError::Disconnected(_)) => {
                         warn!("Encode thread disconnected");
                         return;
                     }
+                }
+
+                // Periodic frame stats logging
+                if last_stats_log.elapsed() >= Duration::from_secs(5) && frames_total > 0 {
+                    let rate = 100.0 * frames_dropped as f64 / frames_total as f64;
+                    info!(
+                        "Frame stats: {}/{} frames dropped ({:.1}%)",
+                        frames_dropped, frames_total, rate
+                    );
+                    frames_total = 0;
+                    frames_dropped = 0;
+                    last_stats_log = Instant::now();
                 }
 
                 // Adapt quality based on overall pipeline performance
