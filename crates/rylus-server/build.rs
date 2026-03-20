@@ -2,7 +2,6 @@ use std::path::Path;
 use std::process::Command;
 
 fn main() {
-    // TypeScript compilation
     let workspace_root = Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .unwrap()
@@ -11,15 +10,9 @@ fn main() {
     let ts_file = workspace_root.join("ts/lib.ts");
     let js_file = workspace_root.join("www/static/lib.js");
 
+    // Rebuild when the TS source or the generated JS changes
     println!("cargo:rerun-if-changed={}", ts_file.display());
-
-    #[cfg(not(target_os = "windows"))]
-    let mut tsc_command = Command::new("tsc");
-
-    #[cfg(target_os = "windows")]
-    let mut tsc_command = Command::new("bash");
-    #[cfg(target_os = "windows")]
-    tsc_command.args(&["-c", "tsc"]);
+    println!("cargo:rerun-if-changed={}", js_file.display());
 
     let js_needs_update = || -> Result<bool, Box<dyn std::error::Error>> {
         Ok(ts_file.metadata()?.modified()? > js_file.metadata()?.modified()?)
@@ -27,22 +20,24 @@ fn main() {
     .unwrap_or(true);
 
     if js_needs_update {
-        // Run tsc from the workspace root where tsconfig.json lives
-        tsc_command.current_dir(workspace_root);
-        match tsc_command.status() {
+        let status = Command::new("npx")
+            .args(["esbuild", "ts/lib.ts", "--target=es2020", "--outfile=www/static/lib.js"])
+            .current_dir(workspace_root)
+            .status();
+
+        match status {
             Err(err) => {
-                println!("cargo:warning=Failed to call tsc: {}", err);
+                println!("cargo:warning=Failed to call esbuild: {err}");
                 std::process::exit(1);
             }
-            Ok(status) => {
-                if !status.success() {
-                    match status.code() {
-                        Some(code) => println!("cargo:warning=tsc failed with exitcode: {}", code),
-                        None => println!("cargo:warning=tsc terminated by signal."),
-                    };
-                    std::process::exit(2);
-                }
+            Ok(s) if !s.success() => {
+                println!(
+                    "cargo:warning=esbuild failed with exit code: {}",
+                    s.code().map_or("signal".to_string(), |c| c.to_string())
+                );
+                std::process::exit(2);
             }
+            Ok(_) => {}
         }
     }
 }
