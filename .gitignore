@@ -11,3 +11,4 @@
 *.js
 *.js.map
 *.tar.gz
+.gstack/

@@ -43,97 +43,53 @@
 
 ### Migrate GUI from FLTK to egui
 
-**What:** Replace `fltk-rs` (C++ FLTK bindings) with `egui` (pure Rust immediate-mode GUI) for the native desktop interface.
+**What:** Replace `fltk-rs` (C++ FLTK bindings) with `egui` (pure Rust immediate-mode GUI) for the native desktop interface. Redesign the layout with intentional information hierarchy and modern UX patterns.
 
-**Why:** fltk-rs compiles the C++ FLTK library, adding ~30-50s to build time and requiring a C++ compiler. egui is pure Rust with no C/C++ compilation, modern immediate-mode API, and excellent cross-platform support. The Rylus GUI is simple (settings panel, QR code, connection status) — perfect for egui.
+**Why:** fltk-rs compiles the C++ FLTK library, adding ~30-50s to build time and requiring a C++ compiler. egui is pure Rust with no C/C++ compilation, modern immediate-mode API, and excellent cross-platform support. The Rylus GUI is simple (settings panel, QR code, connection status) — perfect for egui. This is also the opportunity to fix the flat, unhierarchical layout.
 
-**Context:** GUI code lives in `crates/rylus-gui/src/lib.rs` (813 lines). Key UI elements: bind address/port inputs, access code input, start/stop button, capturable list, connection status, QR code display, theme selection. egui provides all of these natively. Use `eframe` as the app framework (handles windowing). QR code rendering can use the existing `qrcode` crate output rendered to egui's painter. The 8 FLTK themes map to egui's `Visuals` system. The GUI is already optional (feature flag `gui`), so this is a drop-in replacement behind the same flag.
+**Context:** GUI code lives in `crates/rylus-gui/src/lib.rs` (813 lines). Use `eframe` as the app framework (handles windowing). The GUI is already optional (feature flag `gui`), so this is a drop-in replacement behind the same flag.
+
+**Design Decisions (from design review 2026-03-19):**
+
+1. **Hero action layout:** Start/Stop button and connection URL + QR code at top as the primary visual element. Settings grouped in collapsible sections below (Connection, Encoding, Preferences). Log viewer collapsible at bottom.
+
+2. **Custom Rylus theme:** Single intentional theme matching web client — dark/light mode following system preference (`prefers-color-scheme` equivalent), cyan accent (`#00aaff`), dark bg `#303030`, light bg `#eee`. Drop the 8-theme picker.
+
+3. **Inline contextual errors:** Replace FLTK `alert()` dialogs with inline error messages below the relevant input field (e.g., red text "Not a valid IP address" under bind address). Non-blocking, contextual.
+
+4. **QR code on all platforms:** Enable QR code display on macOS and Windows (currently Linux-only). The FLTK image handling limitation is gone with egui's native texture support.
+
+5. **First-run experience:** On first launch (no saved config), show contextual hint text: "Start the server, then scan the QR code on your tablet to connect." Below collapsible sections: "(defaults work for most setups)". Disappears after first successful server start.
+
+6. **Interaction states:** Button shows "Starting..." with spinner during server start. Server start failure shows inline error below button (not alert dialog). Empty log viewer shows "No log messages yet. Start the server to begin."
 
 **Effort:** L
 **Priority:** P3
+**Depends on:** Create DESIGN.md (soft dependency)
+
+## UX
+
+### Add tablet-optimized bottom sheet settings panel
+
+**What:** On tablet viewports (480px–1024px), replace the side-drawer settings panel with a draggable bottom sheet. Half-height by default, drag handle to expand to full-height. Tab navigation across settings groups (Capture | Video | Input | Display).
+
+**Why:** The settings side-drawer covers ~25% of the video on a 10" tablet in landscape. Tablets are the primary device class for Rylus's web client. A bottom sheet is a well-understood mobile/tablet pattern that doesn't occlude the video horizontally.
+
+**Context:** Settings panel CSS is in `www/static/style.css` (`.settings` class, 16em wide). JS toggle logic in `ts/lib.ts`. Add a `@media (min-width: 480px) and (max-width: 1024px)` breakpoint. Bottom sheet needs: drag handle element, CSS `transform: translateY()` for slide-up, touch drag handler for resize, tab bar for section navigation. Lefty mode not applicable to bottom sheet (already centered).
+
+**Effort:** M
+**Priority:** P2
 **Depends on:** None
 
 ## Architecture
 
-### Move Capturable trait + Geometry to rylus-core
-
-**What:** Move `Capturable` trait, `Recorder` trait, `Geometry` enum, and related types from `rylus-capture` to `rylus-core`.
-
-**Why:** Currently `rylus-input` depends on `rylus-capture` solely for the `Capturable` trait's geometry types. This creates an awkward sibling dependency. These are shared protocol concepts that belong in core alongside `MessageInbound`/`MessageOutbound`.
-
-**Context:** `Capturable` is defined in `crates/rylus-capture/src/lib.rs`. `Geometry` is used by both capture and input crates. Moving to core removes the `input→capture` dependency edge. The platform-specific implementations (`X11Capturable`, `PipeWireCapturable`, etc.) stay in `rylus-capture`. Only the trait definition and geometry types move. Update `Cargo.toml` for both `rylus-capture` and `rylus-input` to remove the cross-dependency.
-
-**Effort:** S
-**Priority:** P2
-**Depends on:** None
-
 ## Code Quality
-
-### Add SAFETY comments to all unsafe blocks
-
-**What:** Document invariants and soundness reasoning for all 68 unsafe blocks across the codebase.
-
-**Why:** Only 7 of 68 unsafe blocks have SAFETY comments. Undocumented unsafe code is a maintenance hazard — future contributors (or future you) can unknowingly break invariants. The FFmpeg FFI in `rylus-encode` (25+ blocks) and `unsafe impl Send` in `rylus-transport` are the highest risk.
-
-**Context:** Main unsafe areas: `rylus-encode/src/lib.rs` (FFmpeg pointer ops, AVIO callbacks, filter graph), `rylus-capture/src/x11.rs` (X11 FFI), `rylus-capture/src/core_graphics.rs` (macOS FFI), `rylus-transport/src/websocket.rs` (Send impl). Follow Rust convention: `// SAFETY: <why this is sound>` immediately before each unsafe block. For Send impls, document which fields are actually thread-safe and why.
-
-**Effort:** M
-**Priority:** P1
-**Depends on:** None
-
-### Audit and fix all unwrap() calls
-
-**What:** Replace all 59 `unwrap()` calls with proper error handling. Fix confirmed bug in `enigo_device.rs` geometry matching.
-
-**Why:** `unwrap()` in production code is a crash waiting to happen. One confirmed bug: `enigo_device.rs:49` calls `.geometry().unwrap()` then pattern-matches only `Geometry::Relative` — on Linux, a `VirtualScreen` variant panics. `CString::new().unwrap()` in `rylus-encode` (4 occurrences) panics on strings with null bytes.
-
-**Context:** Triage by severity: (1) `enigo_device.rs:49` geometry bug — add fallback arm, (2) `rylus-encode` CString calls — use `.expect("reason")` or propagate Result, (3) `rylus-gui` mutex locks — `.unwrap()` is acceptable for poisoned mutexes (unrecoverable), document with `.expect("mutex poisoned")`, (4) remaining sites — case-by-case. Run `rg 'unwrap\(\)' crates/` to find all sites.
-
-**Effort:** M
-**Priority:** P1
-**Depends on:** None
 
 ## CI/CD
 
-### Add clippy, rustfmt, and cargo-audit to CI pipeline
-
-**What:** Add CI steps for `cargo clippy --all-targets -- -D warnings`, `cargo fmt -- --check`, and `cargo audit`.
-
-**Why:** No code quality gates in CI. Builds succeed with warnings, dead code, formatting drift, or known CVEs in dependencies. These are the cheapest layer of the testing pyramid.
-
-**Context:** CI is in `.github/workflows/build.yml`. Currently only builds and packages. Add a separate job (or early step) that runs clippy+fmt+audit before the build matrix. `cargo-audit` needs the `cargo-audit` binary installed. Consider using `actions-rs/audit-check` or installing via `cargo install cargo-audit`. Clippy and fmt are built into rustup.
-
-**Effort:** S
-**Priority:** P1
-**Depends on:** None
-
 ## Testing
 
-### Write comprehensive test suite
-
-**What:** Unit tests for all pure/testable codepaths across all 8 crates. Integration test for TestSrc capture→encode pipeline.
-
-**Why:** Zero test coverage. Every codepath is untested. Protocol serialization, config parsing, coordinate transforms, key mapping, quality adaptation logic, and HTTP routing are all pure functions that are trivially testable.
-
-**Context:** Priority order: (1) `rylus-core` — protocol serde roundtrip, config TOML parsing, Geometry construction, CError Display, pixel format conversions, (2) `rylus-input` — key code mapping completeness, coordinate transforms, geometry matching edge cases, (3) `rylus-encode` — quality adaptation (QP calculation from buffer health/pipeline ratio), (4) `rylus-server/web` — HTTP routing, access code validation, template rendering, (5) `rylus-transport` — message parsing, (6) `rylus-capture` — TestSrc output, (7) Integration — TestSrc→encode pipeline end-to-end. Use `#[cfg(test)] mod tests` in each crate's lib.rs. The `testsrc.rs` capturable already exists as a synthetic test source.
-
-**Effort:** L
-**Priority:** P1
-**Depends on:** None
-
 ## Performance
-
-### Add frame drop metrics and pipeline timing
-
-**What:** Track frame drop count/rate in the video capture thread. Log periodically at INFO level. Expose via protocol for frontend display.
-
-**Why:** Frames are silently dropped via `try_send()` when the encoder can't keep up. Without visibility into drop rate, diagnosing "why does it feel laggy?" requires guesswork. The adaptive quality system adjusts QP based on buffer health, but there's no capture-side visibility.
-
-**Context:** Frame drops happen in `crates/rylus-server/src/session.rs` in the `handle_video()` function where `try_send()` returns `Err`. Add a counter that increments on each drop and logs every 5 seconds (or N frames). Optionally add a new `MessageOutbound` variant for frame stats so the TypeScript frontend can display drop rate alongside FPS.
-
-**Effort:** S
-**Priority:** P2
-**Depends on:** None
 
 ### Investigate PipeWire zero-copy via DMA-BUF
 
@@ -178,3 +134,67 @@
 **Effort:** S
 **Priority:** P0
 **Completed:** v0.12.2 (2026-03-19)
+
+### Create DESIGN.md
+
+**What:** Formal design system document for both native egui client and web tablet client.
+
+**Effort:** S
+**Priority:** P1
+**Completed:** v0.13.1 (2026-03-19)
+
+### Add clippy, rustfmt, and cargo-audit to CI pipeline
+
+**What:** CI quality gates running before build jobs.
+
+**Effort:** S
+**Priority:** P1
+**Completed:** v0.13.1 (2026-03-19)
+
+### Add SAFETY comments to all unsafe blocks
+
+**What:** Document invariants and soundness reasoning for all unsafe blocks across the codebase.
+
+**Effort:** M
+**Priority:** P1
+**Completed:** v0.13.1 (2026-03-19)
+
+### Audit and fix all unwrap() calls
+
+**What:** Replace all unwrap() calls with proper error handling. Fixed geometry matching bug in enigo_device.rs.
+
+**Effort:** M
+**Priority:** P1
+**Completed:** v0.13.1 (2026-03-19)
+
+### Write comprehensive test suite
+
+**What:** 97 unit tests across rylus-core (74) and rylus-server (23) covering protocol serde, config parsing, pixel types, error handling, access code auth, rate limiting, and session management.
+
+**Effort:** L
+**Priority:** P1
+**Completed:** v0.14.0 (2026-03-19)
+
+### Move Capturable trait + Geometry to rylus-core
+
+**What:** Moved Capturable, Recorder, Geometry, and BoxCloneCapturable from rylus-capture to rylus-core.
+
+**Effort:** S
+**Priority:** P2
+**Completed:** v0.14.0 (2026-03-19)
+
+### Add frame drop metrics and pipeline timing
+
+**What:** Frame drop counter with periodic INFO logging every 5 seconds.
+
+**Effort:** S
+**Priority:** P2
+**Completed:** v0.14.0 (2026-03-19)
+
+### Add auto-reconnect to web client
+
+**What:** WebSocket auto-reconnect with exponential backoff, countdown display, and state preservation.
+
+**Effort:** M
+**Priority:** P1
+**Completed:** v0.14.0 (2026-03-19)

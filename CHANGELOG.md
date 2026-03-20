@@ -1,5 +1,34 @@
 # Changelog
 
+## [0.14.0] - 2026-03-19
+
+### Added
+
+- WebSocket auto-reconnect in web client — exponential backoff (1s–30s),
+  countdown banner with "Retry Now" button, 10 max attempts, full state
+  preservation across reconnections
+- Frame drop metrics logged at INFO level every 5 seconds for pipeline
+  health visibility (capture drops and pacing drops)
+- Comprehensive test suite: 97 tests across rylus-core (protocol serde,
+  config parsing, pixel formats, error handling) and rylus-server (access
+  code auth, rate limiting, session tokens)
+- DESIGN.md design system document defining color tokens, typography,
+  spacing, and component patterns for both native and web clients
+- CI quality gates: clippy, rustfmt, and cargo-audit run before builds
+
+### Fixed
+
+- Geometry matching panic in enigo_device.rs on Linux — VirtualScreen
+  variant now handled instead of crashing
+- All 54 `unwrap()` calls replaced with proper error handling or
+  descriptive `.expect()` messages
+
+### Changed
+
+- Moved Capturable, Recorder, Geometry traits from rylus-capture to
+  rylus-core (rylus-capture re-exports for backwards compatibility)
+- SAFETY comments added to all ~60 unsafe blocks documenting invariants
+
 ## [0.13.0] - 2026-03-19
 
 ### Security
