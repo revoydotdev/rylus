@@ -3,7 +3,7 @@ ENV RUSTUP_HOME="/usr/local/rustup" CARGO_HOME="/usr/local/cargo" PATH="/usr/loc
 RUN apt-get update && \
    apt-get install -y libgl1-mesa-dev libglu1-mesa-dev cmake git curl \
    software-properties-common zip libssl-dev \
-   gcc g++ autoconf libtool-bin libdrm-dev pkg-config mingw-w64 \
+   gcc g++ autoconf libtool-bin libdrm-dev pkg-config \
    libpipewire-0.3-dev libdbus-1-dev clang \
    libwayland-dev libxkbcommon-dev
 RUN apt-add-repository contrib
@@ -20,4 +20,3 @@ RUN curl -sL https://deb.nodesource.com/setup_22.x | bash - && \
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | \
     sh -s -- -y --default-toolchain stable-x86_64-unknown-linux-gnu
 RUN cargo install cargo-deb
-RUN rustup target add x86_64-pc-windows-gnu
