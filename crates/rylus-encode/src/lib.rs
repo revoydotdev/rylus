@@ -239,16 +239,30 @@ impl ScaleContext {
                 return Err(enc_err!("Cannot allocate buffer sink"));
             }
 
-            // Set output pixel format on buffersink using av_opt_set_bin
-            // (equivalent to the C macro av_opt_set_int_list for a single format)
-            let pix_fmts: [c_int; 1] = [pix_fmt_out as c_int];
-            let ret = ffi::av_opt_set_bin(
+            // Set output pixel format on buffersink.
+            // FFmpeg 8+ has "pixel_formats" as an array option (set via string name),
+            // while older versions use "pix_fmts" as a binary option.
+            let fmt_name = pix_fmt_name(pix_fmt_out);
+            let fmt_name_c = CString::new(fmt_name).expect("pix fmt name should not contain null");
+            let ret = ffi::av_opt_set(
                 buffersink_ctx as *mut c_void,
-                c"pix_fmts".as_ptr(),
-                pix_fmts.as_ptr() as *const u8,
-                std::mem::size_of_val(&pix_fmts) as c_int,
+                c"pixel_formats".as_ptr(),
+                fmt_name_c.as_ptr(),
                 ffi::AV_OPT_SEARCH_CHILDREN,
             );
+            // Fall back to legacy binary option for FFmpeg < 7.1
+            let ret = if ret < 0 {
+                let pix_fmts: [c_int; 1] = [pix_fmt_out as c_int];
+                ffi::av_opt_set_bin(
+                    buffersink_ctx as *mut c_void,
+                    c"pix_fmts".as_ptr(),
+                    pix_fmts.as_ptr() as *const u8,
+                    std::mem::size_of_val(&pix_fmts) as c_int,
+                    ffi::AV_OPT_SEARCH_CHILDREN,
+                )
+            } else {
+                ret
+            };
             if ret < 0 {
                 ffi::avfilter_graph_free(&mut { filter_graph });
                 ffi::av_frame_free(&mut { frame_in });
