@@ -4,12 +4,13 @@ version.workspace = true
 authors.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "FLTK GUI for Rylus"
+description = "egui GUI for Rylus"
 
 [dependencies]
 rylus-core = { workspace = true, features = ["gui"] }
-fltk = { version = "^1.5", features = ["use-wayland"] }
-fltk-theme = "^0.7.9"
+eframe = "0.31"
+egui = "0.31"
+egui_extras = { version = "0.31", features = ["image"] }
 image = { version = "^0.25", features = ["png"], default-features = false }
 percent-encoding = "2.3"
 qrcode = "0.14.1"
