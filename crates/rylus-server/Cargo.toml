@@ -14,11 +14,10 @@ path = "src/main.rs"
 default = []
 bench = []
 gui = ["dep:rylus-gui", "rylus-core/gui"]
-x11 = ["rylus-capture/x11", "rylus-input/x11", "dep:rylus-ffi"]
+x11 = ["rylus-capture/x11", "rylus-input/x11"]
 
 [dependencies]
 rylus-core = { workspace = true }
-rylus-ffi = { workspace = true, features = ["x11"], optional = true }
 rylus-capture = { workspace = true }
 rylus-encode = { workspace = true }
 rylus-input = { workspace = true }
@@ -44,4 +43,4 @@ tracing-subscriber = { workspace = true }
 url = "^2.5"
 
 [target.'cfg(target_os = "linux")'.dependencies]
-gstreamer = "^0.24"
+pipewire = "0.9"

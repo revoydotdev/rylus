@@ -2,7 +2,6 @@
 resolver = "2"
 members = [
     "crates/rylus-core",
-    "crates/rylus-ffi",
     "crates/rylus-capture",
     "crates/rylus-encode",
     "crates/rylus-input",
@@ -20,7 +19,6 @@ license = "AGPL-3.0-or-later"
 [workspace.dependencies]
 # Internal crates
 rylus-core = { path = "crates/rylus-core" }
-rylus-ffi = { path = "crates/rylus-ffi" }
 rylus-capture = { path = "crates/rylus-capture" }
 rylus-encode = { path = "crates/rylus-encode" }
 rylus-input = { path = "crates/rylus-input" }
