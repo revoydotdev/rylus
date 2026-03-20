@@ -644,7 +644,14 @@ impl VideoEncoder {
                 ffi::AVIO_FLAG_WRITE,
                 self as *mut Self as *mut c_void,
                 None,
-                Some(avio_write_callback),
+                // SAFETY: avio_alloc_context's write callback signature changed between
+                // FFmpeg versions (*const u8 in older, *mut u8 in newer). We cast the
+                // function pointer via `as` to erase the exact type, then transmute to
+                // match whichever FFmpeg is installed. The callback only reads from buf.
+                #[allow(clippy::missing_transmute_annotations)]
+                Some(std::mem::transmute::<usize, _>(
+                    avio_write_callback as usize,
+                )),
                 None,
             );
             if avio.is_null() {
