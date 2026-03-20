@@ -9,7 +9,31 @@ on:
     branches: [ master ]
 
 jobs:
+  quality:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v6
+    - uses: dtolnay/rust-toolchain@stable
+      with:
+        components: clippy, rustfmt
+    - uses: actions/cache@v5
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+          target
+        key: ${{ runner.os }}-quality-cargo-${{ hashFiles('Cargo.lock') }}
+    - name: Clippy
+      run: cargo clippy --all-targets -- -D warnings
+    - name: Rustfmt
+      run: cargo fmt -- --check
+    - name: Install cargo-audit
+      run: cargo install cargo-audit
+    - name: Audit
+      run: cargo audit
+
   build-docker:
+    needs: quality
     runs-on: ubuntu-latest
     container: docker://hhmhh/weylus_build:latest
     steps:
@@ -56,6 +80,7 @@ jobs:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   build-docker-alpine:
+    needs: quality
     runs-on: ubuntu-latest
     container: docker://hhmhh/weylus_build_alpine:latest
     steps:
@@ -90,6 +115,7 @@ jobs:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   build-macos:
+    needs: quality
     strategy:
       matrix:
         os: [macos-latest, macos-15-intel] # -latest is for Apple Silicon, -15-intel is for Intel
