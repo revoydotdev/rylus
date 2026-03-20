@@ -650,7 +650,7 @@ impl VideoEncoder {
                 // match whichever FFmpeg is installed. The callback only reads from buf.
                 #[allow(clippy::missing_transmute_annotations)]
                 Some(std::mem::transmute::<usize, _>(
-                    avio_write_callback as usize,
+                    avio_write_callback as *const () as usize,
                 )),
                 None,
             );
