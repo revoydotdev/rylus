@@ -3,7 +3,11 @@ use std::process::Command;
 
 fn main() {
     // TypeScript compilation
-    let workspace_root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap();
+    let workspace_root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap();
     let ts_file = workspace_root.join("ts/lib.ts");
     let js_file = workspace_root.join("www/static/lib.js");
 

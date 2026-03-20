@@ -19,18 +19,16 @@ fn get_adapter_outputs(adapter: &IDXGIAdapter1) -> Vec<IDXGIOutput> {
         // GetDesc populates a valid DXGI_OUTPUT_DESC for attached outputs.
         unsafe {
             match adapter.EnumOutputs(i) {
-                Ok(output) => {
-                    match output.GetDesc() {
-                        Ok(desc) => {
-                            if desc.AttachedToDesktop == true {
-                                outputs.push(output);
-                            } else {
-                                break;
-                            }
+                Ok(output) => match output.GetDesc() {
+                    Ok(desc) => {
+                        if desc.AttachedToDesktop == true {
+                            outputs.push(output);
+                        } else {
+                            break;
                         }
-                        Err(_) => break,
                     }
-                }
+                    Err(_) => break,
+                },
                 Err(_) => break,
             }
         }

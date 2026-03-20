@@ -12,7 +12,7 @@ use x11rb::protocol::randr::ConnectionExt as _;
 use x11rb::protocol::shm::{self, ConnectionExt as _};
 use x11rb::protocol::xfixes::ConnectionExt as _;
 use x11rb::protocol::xinput::ConnectionExt as _;
-use x11rb::protocol::xproto::{self, ConnectionExt as _, AtomEnum, Window};
+use x11rb::protocol::xproto::{self, AtomEnum, ConnectionExt as _, Window};
 use x11rb::rust_connection::RustConnection;
 
 // SysV shared memory helpers (using libc directly)
@@ -23,9 +23,7 @@ mod sysv_shm {
     pub fn alloc(size: usize) -> Result<(i32, *mut u8), String> {
         // SAFETY: IPC_PRIVATE (0) creates a new unique segment. The flags request
         // creation with rwxrwxrwx permissions.
-        let shm_id = unsafe {
-            libc::shmget(libc::IPC_PRIVATE, size, libc::IPC_CREAT | 0o777)
-        };
+        let shm_id = unsafe { libc::shmget(libc::IPC_PRIVATE, size, libc::IPC_CREAT | 0o777) };
         if shm_id < 0 {
             return Err(format!(
                 "shmget failed: {}",
@@ -39,10 +37,7 @@ mod sysv_shm {
         if addr == usize::MAX as *mut libc::c_void {
             // shmat failed -- clean up the segment
             unsafe { libc::shmctl(shm_id, libc::IPC_RMID, ptr::null_mut()) };
-            return Err(format!(
-                "shmat failed: {}",
-                std::io::Error::last_os_error()
-            ));
+            return Err(format!("shmat failed: {}", std::io::Error::last_os_error()));
         }
 
         Ok((shm_id, addr as *mut u8))
@@ -323,11 +318,16 @@ impl RecorderX11 {
             .unwrap_or(false);
 
         // Get initial geometry
-        let (_, _, width, height) = get_target_geometry(conn, capturable.conn.root, &capturable.target)?;
+        let (_, _, width, height) =
+            get_target_geometry(conn, capturable.conn.root, &capturable.target)?;
 
         // If this is a regular window and composite is available, redirect it
         if has_composite {
-            if let CaptureTarget::Window { win, is_regular_window: true } = &capturable.target {
+            if let CaptureTarget::Window {
+                win,
+                is_regular_window: true,
+            } = &capturable.target
+            {
                 let _ = conn.composite_redirect_window(*win, composite::Redirect::AUTOMATIC);
                 let _ = conn.flush();
             }
@@ -337,10 +337,12 @@ impl RecorderX11 {
         let bytes_per_pixel = 4u32; // ZPixmap with depth >= 24 is always 4 bytes/pixel
         let seg_size = width as u32 * height as u32 * bytes_per_pixel;
 
-        let (shm_id, shm_addr) = sysv_shm::alloc(seg_size as usize)
-            .map_err(|e| CError::with_code(1, &e))?;
+        let (shm_id, shm_addr) =
+            sysv_shm::alloc(seg_size as usize).map_err(|e| CError::with_code(1, &e))?;
 
-        let shm_seg = conn.generate_id().map_err(|e| CError::with_code(1, &e.to_string()))?;
+        let shm_seg = conn
+            .generate_id()
+            .map_err(|e| CError::with_code(1, &e.to_string()))?;
         conn.shm_attach(shm_seg, shm_id as u32, false)
             .map_err(|e| CError::with_code(1, &format!("ShmAttach failed: {}", e)))?;
         let _ = conn.flush();
@@ -372,8 +374,8 @@ impl RecorderX11 {
         let bytes_per_pixel = 4u32;
         let seg_size = new_width as u32 * new_height as u32 * bytes_per_pixel;
 
-        let (shm_id, shm_addr) = sysv_shm::alloc(seg_size as usize)
-            .map_err(|e| CError::with_code(1, &e))?;
+        let (shm_id, shm_addr) =
+            sysv_shm::alloc(seg_size as usize).map_err(|e| CError::with_code(1, &e))?;
 
         let shm_seg = conn
             .generate_id()
@@ -398,7 +400,11 @@ impl Drop for RecorderX11 {
 
         // Unredirect if we redirected
         if self.has_composite {
-            if let CaptureTarget::Window { win, is_regular_window: true } = &self.capturable.target {
+            if let CaptureTarget::Window {
+                win,
+                is_regular_window: true,
+            } = &self.capturable.target
+            {
                 let _ = conn.composite_unredirect_window(*win, composite::Redirect::AUTOMATIC);
             }
         }
@@ -444,21 +450,49 @@ impl Recorder for RecorderX11 {
 
                     if is_active {
                         // Capture from root at the window's position to include menus
-                        shm_get_image(conn, root, x as i16, y as i16, self.width, self.height, self.shm_seg)
+                        shm_get_image(
+                            conn,
+                            root,
+                            x as i16,
+                            y as i16,
+                            self.width,
+                            self.height,
+                            self.shm_seg,
+                        )
                     } else if is_offscreen {
-                        capture_offscreen(conn, *win, self.has_composite, self.width, self.height, self.shm_seg)
+                        capture_offscreen(
+                            conn,
+                            *win,
+                            self.has_composite,
+                            self.width,
+                            self.height,
+                            self.shm_seg,
+                        )
                     } else {
                         shm_get_image(conn, *win, 0, 0, self.width, self.height, self.shm_seg)
                     }
                 } else if is_offscreen {
-                    capture_offscreen(conn, *win, self.has_composite, self.width, self.height, self.shm_seg)
+                    capture_offscreen(
+                        conn,
+                        *win,
+                        self.has_composite,
+                        self.width,
+                        self.height,
+                        self.shm_seg,
+                    )
                 } else {
                     shm_get_image(conn, *win, 0, 0, self.width, self.height, self.shm_seg)
                 }
             }
-            CaptureTarget::Rect { .. } => {
-                shm_get_image(conn, root, x as i16, y as i16, self.width, self.height, self.shm_seg)
-            }
+            CaptureTarget::Rect { .. } => shm_get_image(
+                conn,
+                root,
+                x as i16,
+                y as i16,
+                self.width,
+                self.height,
+                self.shm_seg,
+            ),
         };
 
         let last_ok = self.last_capture_ok;
@@ -500,14 +534,20 @@ fn get_target_geometry(
         CaptureTarget::Window { win, .. } => {
             let geom = conn
                 .get_geometry(*win)
-                .map_err(|e| CError::with_code(1, &format!("Failed to get window geometry: {}", e)))?
+                .map_err(|e| {
+                    CError::with_code(1, &format!("Failed to get window geometry: {}", e))
+                })?
                 .reply()
-                .map_err(|e| CError::with_code(1, &format!("Failed to get window geometry: {}", e)))?;
+                .map_err(|e| {
+                    CError::with_code(1, &format!("Failed to get window geometry: {}", e))
+                })?;
             let coords = conn
                 .translate_coordinates(*win, root, 0, 0)
                 .map_err(|e| CError::with_code(1, &format!("translate_coordinates failed: {}", e)))?
                 .reply()
-                .map_err(|e| CError::with_code(1, &format!("translate_coordinates failed: {}", e)))?;
+                .map_err(|e| {
+                    CError::with_code(1, &format!("translate_coordinates failed: {}", e))
+                })?;
             Ok((
                 coords.dst_x as i32,
                 coords.dst_y as i32,
@@ -673,11 +713,7 @@ fn get_string_property(conn: &RustConnection, win: Window, prop_name: &[u8]) -> 
     Some(String::from_utf8_lossy(&prop.value).into_owned())
 }
 
-fn activate_window(
-    conn: &RustConnection,
-    root: Window,
-    win: Window,
-) -> Result<(), Box<dyn Error>> {
+fn activate_window(conn: &RustConnection, root: Window, win: Window) -> Result<(), Box<dyn Error>> {
     // Check if already active
     if let Some(active) = get_active_window(conn, root) {
         if active == win {
@@ -689,7 +725,13 @@ fn activate_window(
     if let Some(desktop) = get_cardinal_property(conn, win, b"_NET_WM_DESKTOP")
         .or_else(|| get_cardinal_property(conn, win, b"_WIN_WORKSPACE"))
     {
-        send_client_message(conn, root, root, b"_NET_CURRENT_DESKTOP", [desktop, 0, 0, 0, 0])?;
+        send_client_message(
+            conn,
+            root,
+            root,
+            b"_NET_CURRENT_DESKTOP",
+            [desktop, 0, 0, 0, 0],
+        )?;
     }
 
     // Activate window
@@ -775,8 +817,7 @@ fn composite_cursor(
 
     // SAFETY: shm_addr points to shared memory of cap_width * cap_height * 4 bytes.
     // We only write within bounds guaranteed by the clamping above.
-    let data =
-        unsafe { std::slice::from_raw_parts_mut(shm_addr as *mut u32, (w * h) as usize) };
+    let data = unsafe { std::slice::from_raw_parts_mut(shm_addr as *mut u32, (w * h) as usize) };
 
     let cursor_pixels = &cursor_img.cursor_image;
 
@@ -841,9 +882,8 @@ fn map_input_device_impl(
         }
     }
 
-    let device_id = device_id.ok_or_else(|| {
-        format!("Device with name: {} not found!", device_name)
-    })?;
+    let device_id =
+        device_id.ok_or_else(|| format!("Device with name: {} not found!", device_name))?;
 
     let float_atom = conn.intern_atom(false, b"FLOAT")?.reply()?.atom;
     let matrix_atom = conn

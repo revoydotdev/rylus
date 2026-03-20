@@ -7,8 +7,8 @@ use tracing::{debug, info, warn};
 
 use rylus_core::pixel::PixelProvider;
 
-use ffmpeg_sys_next as ffi;
 use ffi::AVPixelFormat;
+use ffmpeg_sys_next as ffi;
 
 // ============================================================
 // Error Type
@@ -147,10 +147,7 @@ fn build_scale_filter_str(
             }
         }
         _ => {
-            format!(
-                "scale=w={}:h={}:flags=fast_bilinear",
-                width_out, height_out
-            )
+            format!("scale=w={}:h={}:flags=fast_bilinear", width_out, height_out)
         }
     }
 }
@@ -168,6 +165,7 @@ struct ScaleContext {
 }
 
 impl ScaleContext {
+    #[allow(clippy::too_many_arguments)]
     fn new(
         width_in: i32,
         height_in: i32,
@@ -214,13 +212,7 @@ impl ScaleContext {
             // Create buffer source
             let args = format!(
                 "video_size={}x{}:pix_fmt={}:time_base={}/{}:pixel_aspect={}/{}",
-                width_in,
-                height_in,
-                pix_fmt_in as c_int,
-                TIME_BASE.num,
-                TIME_BASE.den,
-                1,
-                1
+                width_in, height_in, pix_fmt_in as c_int, TIME_BASE.num, TIME_BASE.den, 1, 1
             );
             let args_c = CString::new(args).expect("filter args should not contain null bytes");
             let mut buffersrc_ctx: *mut ffi::AVFilterContext = ptr::null_mut();
@@ -293,9 +285,14 @@ impl ScaleContext {
 
             // Build and parse the scale filter
             let filter_str = build_scale_filter_str(
-                pix_fmt_in, pix_fmt_out, pix_fmt_sw_out, width_out, height_out,
+                pix_fmt_in,
+                pix_fmt_out,
+                pix_fmt_sw_out,
+                width_out,
+                height_out,
             );
-            let filter_c = CString::new(filter_str).expect("filter string should not contain null bytes");
+            let filter_c =
+                CString::new(filter_str).expect("filter string should not contain null bytes");
             let ret = ffi::avfilter_graph_parse_ptr(
                 filter_graph,
                 filter_c.as_ptr(),
@@ -468,8 +465,15 @@ impl Scalers {
             let mut results: Vec<Option<ScaleContext>> = Vec::new();
             for &pix_fmt in &pix_fmts_in {
                 match ScaleContext::new(
-                    width_in, height_in, width_out, height_out, pix_fmt, pix_fmt_out,
-                    hw_device_ctx, pix_fmt_sw_out, frame_out,
+                    width_in,
+                    height_in,
+                    width_out,
+                    height_out,
+                    pix_fmt,
+                    pix_fmt_out,
+                    hw_device_ctx,
+                    pix_fmt_sw_out,
+                    frame_out,
                 ) {
                     Ok(s) => results.push(Some(s)),
                     Err(e) => {
@@ -527,6 +531,7 @@ pub struct VideoEncoder {
     height_in: usize,
     width_out: usize,
     height_out: usize,
+    #[allow(clippy::type_complexity)]
     write_data: Box<dyn FnMut(&[u8])>,
     start_time: Instant,
 }
@@ -662,8 +667,7 @@ impl VideoEncoder {
                 warn!("Video: failed to write header!");
             }
 
-            let codec_name =
-                CStr::from_ptr((*(*self.codec_ctx).codec).name).to_string_lossy();
+            let codec_name = CStr::from_ptr((*(*self.codec_ctx).codec).name).to_string_lossy();
             let pix_fmt = pix_fmt_name((*self.codec_ctx).pix_fmt);
             info!(
                 "Video: {}x{}@{} pix_fmt: {}",
@@ -702,9 +706,7 @@ impl VideoEncoder {
             let vaapi_device_c = vaapi_device
                 .as_ref()
                 .and_then(|d| CString::new(d.as_str()).ok());
-            let device_ptr = vaapi_device_c
-                .as_ref()
-                .map_or(ptr::null(), |c| c.as_ptr());
+            let device_ptr = vaapi_device_c.as_ref().map_or(ptr::null(), |c| c.as_ptr());
 
             let ret = ffi::av_hwdevice_ctx_create(
                 &mut self.hw_device_ctx,
@@ -794,14 +796,18 @@ impl VideoEncoder {
                 Ok(s) => {
                     (*c).pix_fmt = AVPixelFormat::AV_PIX_FMT_NV12;
                     ffi::av_opt_set(
-                        (*c).priv_data, c"rate_control".as_ptr(), c"ld_vbr".as_ptr(), 0,
+                        (*c).priv_data,
+                        c"rate_control".as_ptr(),
+                        c"ld_vbr".as_ptr(),
+                        0,
                     );
                     ffi::av_opt_set(
-                        (*c).priv_data, c"scenario".as_ptr(), c"display_remoting".as_ptr(), 0,
+                        (*c).priv_data,
+                        c"scenario".as_ptr(),
+                        c"display_remoting".as_ptr(),
+                        0,
                     );
-                    ffi::av_opt_set(
-                        (*c).priv_data, c"quality".as_ptr(), c"100".as_ptr(), 0,
-                    );
+                    ffi::av_opt_set((*c).priv_data, c"quality".as_ptr(), c"100".as_ptr(), 0);
                     self.set_codec_params(c);
 
                     let ret = ffi::avcodec_open2(c, codec, ptr::null_mut());
@@ -865,9 +871,7 @@ impl VideoEncoder {
                     (*c).pix_fmt = AVPixelFormat::AV_PIX_FMT_CUDA;
                     (*c).hw_frames_ctx = ffi::av_buffer_ref(s.hw_frames_ctx);
                     ffi::av_opt_set((*c).priv_data, c"preset".as_ptr(), c"p1".as_ptr(), 0);
-                    ffi::av_opt_set(
-                        (*c).priv_data, c"zerolatency".as_ptr(), c"1".as_ptr(), 0,
-                    );
+                    ffi::av_opt_set((*c).priv_data, c"zerolatency".as_ptr(), c"1".as_ptr(), 0);
                     ffi::av_opt_set((*c).priv_data, c"tune".as_ptr(), c"ull".as_ptr(), 0);
                     ffi::av_opt_set((*c).priv_data, c"rc".as_ptr(), c"cbr".as_ptr(), 0);
                     ffi::av_opt_set((*c).priv_data, c"cq".as_ptr(), c"21".as_ptr(), 0);
@@ -920,18 +924,10 @@ impl VideoEncoder {
             ) {
                 Ok(s) => {
                     (*c).pix_fmt = AVPixelFormat::AV_PIX_FMT_YUV420P;
-                    ffi::av_opt_set(
-                        (*c).priv_data, c"realtime".as_ptr(), c"true".as_ptr(), 0,
-                    );
-                    ffi::av_opt_set(
-                        (*c).priv_data, c"allow_sw".as_ptr(), c"true".as_ptr(), 0,
-                    );
-                    ffi::av_opt_set(
-                        (*c).priv_data, c"profile".as_ptr(), c"extended".as_ptr(), 0,
-                    );
-                    ffi::av_opt_set(
-                        (*c).priv_data, c"level".as_ptr(), c"5.2".as_ptr(), 0,
-                    );
+                    ffi::av_opt_set((*c).priv_data, c"realtime".as_ptr(), c"true".as_ptr(), 0);
+                    ffi::av_opt_set((*c).priv_data, c"allow_sw".as_ptr(), c"true".as_ptr(), 0);
+                    ffi::av_opt_set((*c).priv_data, c"profile".as_ptr(), c"extended".as_ptr(), 0);
+                    ffi::av_opt_set((*c).priv_data, c"level".as_ptr(), c"5.2".as_ptr(), 0);
                     self.set_codec_params(c);
 
                     let ret = ffi::avcodec_open2(c, codec, ptr::null_mut());
@@ -977,12 +973,8 @@ impl VideoEncoder {
             ) {
                 Ok(s) => {
                     (*c).pix_fmt = AVPixelFormat::AV_PIX_FMT_YUV420P;
-                    ffi::av_opt_set(
-                        (*c).priv_data, c"preset".as_ptr(), c"ultrafast".as_ptr(), 0,
-                    );
-                    ffi::av_opt_set(
-                        (*c).priv_data, c"tune".as_ptr(), c"zerolatency".as_ptr(), 0,
-                    );
+                    ffi::av_opt_set((*c).priv_data, c"preset".as_ptr(), c"ultrafast".as_ptr(), 0);
+                    ffi::av_opt_set((*c).priv_data, c"tune".as_ptr(), c"zerolatency".as_ptr(), 0);
                     ffi::av_opt_set((*c).priv_data, c"crf".as_ptr(), c"23".as_ptr(), 0);
                     self.set_codec_params(c);
 
@@ -1133,7 +1125,8 @@ impl VideoEncoder {
             if self.codec_ctx.is_null() {
                 return;
             }
-            let qp_str = CString::new(qp.to_string()).expect("numeric string should not contain null bytes");
+            let qp_str =
+                CString::new(qp.to_string()).expect("numeric string should not contain null bytes");
             // Try setting QP via priv_data options (works for most encoders)
             ffi::av_opt_set(
                 (*self.codec_ctx).priv_data,

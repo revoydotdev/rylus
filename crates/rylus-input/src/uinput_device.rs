@@ -224,10 +224,9 @@ pub struct UInputDevice {
 }
 
 impl UInputDevice {
+    #[allow(clippy::result_large_err)]
     pub fn new(capturable: Box<dyn Capturable>, id: &Option<String>) -> Result<Self, CError> {
-        let suffix = id
-            .as_ref()
-            .map_or(String::new(), |id| format!(" - {}", id));
+        let suffix = id.as_ref().map_or(String::new(), |id| format!(" - {}", id));
 
         let name_stylus = format!("Rylus Stylus{}", suffix);
         let name_mouse = format!("Rylus Mouse{}", suffix);
@@ -453,23 +452,21 @@ impl InputDevice for UInputDevice {
                         let slot: usize;
                         if let Some(s) = self.find_slot(event.pointer_id) {
                             slot = s;
-                        } else {
-                            if let Some(s) =
-                                self.touches
-                                    .iter()
-                                    .enumerate()
-                                    .find_map(|(slot, mt)| match mt {
-                                        None => Some(slot),
-                                        Some(_) => None,
-                                    })
-                            {
-                                slot = s;
-                                self.touches[slot] = Some(MultiTouch {
-                                    id: event.pointer_id,
+                        } else if let Some(s) =
+                            self.touches
+                                .iter()
+                                .enumerate()
+                                .find_map(|(slot, mt)| match mt {
+                                    None => Some(slot),
+                                    Some(_) => None,
                                 })
-                            } else {
-                                return;
-                            }
+                        {
+                            slot = s;
+                            self.touches[slot] = Some(MultiTouch {
+                                id: event.pointer_id,
+                            })
+                        } else {
+                            return;
                         };
 
                         let mut events = vec![
@@ -912,14 +909,8 @@ impl InputDevice for UInputDevice {
                             map_key(&format!("Digit{}", c), &KeyboardLocation::STANDARD)
                         };
 
-                        emit_events(
-                            &mut self.keyboard,
-                            &[ev(EventType::KEY, kc, 1)],
-                        );
-                        emit_events(
-                            &mut self.keyboard,
-                            &[ev(EventType::KEY, kc, 0)],
-                        );
+                        emit_events(&mut self.keyboard, &[ev(EventType::KEY, kc, 1)]);
+                        emit_events(&mut self.keyboard, &[ev(EventType::KEY, kc, 0)]);
                     }
                     emit_events(
                         &mut self.keyboard,
@@ -964,10 +955,7 @@ impl InputDevice for UInputDevice {
             );
         }
 
-        emit_events(
-            &mut self.keyboard,
-            &[ev(EventType::KEY, key_code, state)],
-        );
+        emit_events(&mut self.keyboard, &[ev(EventType::KEY, key_code, state)]);
     }
 
     fn set_capturable(&mut self, capturable: Box<dyn Capturable>) {

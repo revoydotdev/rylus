@@ -73,8 +73,9 @@ impl Recorder for CaptrsRecorder {
             .capture_store_frame()
             .map_err(|_e| CaptrsError("Captrs failed to capture frame".into()))?;
         let (w, h) = self.capturer.geometry();
-        let frame = self.capturer.get_stored_frame()
-            .ok_or_else(|| Box::new(CaptrsError("No frame available after capture".into())) as Box<dyn Error>)?;
+        let frame = self.capturer.get_stored_frame().ok_or_else(|| {
+            Box::new(CaptrsError("No frame available after capture".into())) as Box<dyn Error>
+        })?;
         Ok(rylus_core::pixel::PixelProvider::BGR0(
             w as usize,
             h as usize,

@@ -125,7 +125,10 @@ impl Recorder for RecorderCGDisplay {
                 w,
                 h,
                 img.bytes_per_row(),
-                self.img_data.as_ref().expect("img_data was just set above").bytes(),
+                self.img_data
+                    .as_ref()
+                    .expect("img_data was just set above")
+                    .bytes(),
             ))
         } else {
             Err(Box::new(CGError(
@@ -222,7 +225,10 @@ impl Recorder for RecorderCGWindow {
                 w,
                 h,
                 img.bytes_per_row(),
-                self.img_data.as_ref().expect("img_data was just set above").bytes(),
+                self.img_data
+                    .as_ref()
+                    .expect("img_data was just set above")
+                    .bytes(),
             ))
         } else {
             Err(Box::new(CGError(
@@ -255,8 +261,7 @@ fn get_window_infos() -> Vec<WindowInfo> {
             let w: CFDictionary<*const c_void, *const c_void> =
                 unsafe { CFDictionary::wrap_under_get_rule(*w as CFDictionaryRef) };
             let id = w.get(unsafe { window::kCGWindowNumber }.to_void());
-            let id = match unsafe { CFNumber::wrap_under_get_rule(*id as CFNumberRef) }
-                .to_i64() {
+            let id = match unsafe { CFNumber::wrap_under_get_rule(*id as CFNumberRef) }.to_i64() {
                 Some(id) => id as CGWindowID,
                 None => continue,
             };

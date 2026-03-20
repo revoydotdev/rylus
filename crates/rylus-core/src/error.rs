@@ -16,6 +16,12 @@ pub enum CErrorCode {
     UInputNotAccessible,
 }
 
+impl Default for CError {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl CError {
     pub fn new() -> Self {
         Self {
@@ -29,8 +35,8 @@ impl CError {
         err.code = code as c_int;
         let bytes = msg.as_bytes();
         let len = bytes.len().min(1023);
-        for i in 0..len {
-            err.error_str[i] = bytes[i] as c_char;
+        for (i, &b) in bytes[..len].iter().enumerate() {
+            err.error_str[i] = b as c_char;
         }
         err
     }
@@ -40,7 +46,7 @@ impl CError {
     }
 
     pub fn code(&self) -> i32 {
-        self.code as i32
+        self.code
     }
 
     pub fn to_enum(&self) -> CErrorCode {
@@ -57,9 +63,8 @@ impl fmt::Display for CError {
         // SAFETY: error_str is a fixed-size [c_char; 1024] array owned by self, so the
         // pointer is valid for 1024 bytes. We use from_bytes_until_nul to safely handle
         // the case where the C code didn't null-terminate the string.
-        let bytes = unsafe {
-            std::slice::from_raw_parts(self.error_str.as_ptr() as *const u8, 1024)
-        };
+        let bytes =
+            unsafe { std::slice::from_raw_parts(self.error_str.as_ptr() as *const u8, 1024) };
         let msg = match CStr::from_bytes_until_nul(bytes) {
             Ok(s) => s.to_string_lossy(),
             Err(_) => std::borrow::Cow::Borrowed("<invalid error>"),
@@ -119,8 +124,16 @@ mod tests {
     fn display_contains_code_and_message() {
         let e = CError::with_code(42, "test message");
         let display = format!("{}", e);
-        assert!(display.contains("42"), "display should contain code: {}", display);
-        assert!(display.contains("test message"), "display should contain message: {}", display);
+        assert!(
+            display.contains("42"),
+            "display should contain code: {}",
+            display
+        );
+        assert!(
+            display.contains("test message"),
+            "display should contain message: {}",
+            display
+        );
     }
 
     #[test]

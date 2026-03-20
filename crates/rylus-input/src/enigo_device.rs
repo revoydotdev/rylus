@@ -5,9 +5,7 @@ use enigo::{
 use tracing::warn;
 
 use crate::device::{InputDevice, InputDeviceType};
-use rylus_core::protocol::{
-    Button, KeyboardEvent, KeyboardEventType, PointerEvent, WheelEvent,
-};
+use rylus_core::protocol::{Button, KeyboardEvent, KeyboardEventType, PointerEvent, WheelEvent};
 
 use rylus_core::{Capturable, Geometry};
 
@@ -78,19 +76,34 @@ impl InputDevice for EnigoDevice {
         let pressed = event.buttons.contains(event.button);
         match event.button {
             Button::PRIMARY => {
-                let _ = self
-                    .enigo
-                    .button(EnigoButton::Left, if pressed { Direction::Press } else { Direction::Release });
+                let _ = self.enigo.button(
+                    EnigoButton::Left,
+                    if pressed {
+                        Direction::Press
+                    } else {
+                        Direction::Release
+                    },
+                );
             }
             Button::AUXILARY => {
-                let _ = self
-                    .enigo
-                    .button(EnigoButton::Middle, if pressed { Direction::Press } else { Direction::Release });
+                let _ = self.enigo.button(
+                    EnigoButton::Middle,
+                    if pressed {
+                        Direction::Press
+                    } else {
+                        Direction::Release
+                    },
+                );
             }
             Button::SECONDARY => {
-                let _ = self
-                    .enigo
-                    .button(EnigoButton::Right, if pressed { Direction::Press } else { Direction::Release });
+                let _ = self.enigo.button(
+                    EnigoButton::Right,
+                    if pressed {
+                        Direction::Press
+                    } else {
+                        Direction::Release
+                    },
+                );
             }
             _ => (),
         }

@@ -79,7 +79,7 @@ impl<'a, T: blocking::BlockingSender, C: ::std::ops::Deref<Target = T>>
             "CreateSession",
             (options,),
         )
-        .and_then(|r: (dbus::Path<'static>,)| Ok(r.0))
+        .map(|r: (dbus::Path<'static>,)| r.0)
     }
 
     fn select_sources(
@@ -92,7 +92,7 @@ impl<'a, T: blocking::BlockingSender, C: ::std::ops::Deref<Target = T>>
             "SelectSources",
             (session_handle, options),
         )
-        .and_then(|r: (dbus::Path<'static>,)| Ok(r.0))
+        .map(|r: (dbus::Path<'static>,)| r.0)
     }
 
     fn start(
@@ -106,7 +106,7 @@ impl<'a, T: blocking::BlockingSender, C: ::std::ops::Deref<Target = T>>
             "Start",
             (session_handle, parent_window, options),
         )
-        .and_then(|r: (dbus::Path<'static>,)| Ok(r.0))
+        .map(|r: (dbus::Path<'static>,)| r.0)
     }
 
     fn open_pipe_wire_remote(
@@ -119,7 +119,7 @@ impl<'a, T: blocking::BlockingSender, C: ::std::ops::Deref<Target = T>>
             "OpenPipeWireRemote",
             (session_handle, options),
         )
-        .and_then(|r: (arg::OwnedFd,)| Ok(r.0))
+        .map(|r: (arg::OwnedFd,)| r.0)
     }
 
     fn available_source_types(&self) -> Result<u32, dbus::Error> {
@@ -252,7 +252,7 @@ impl<'a, T: blocking::BlockingSender, C: ::std::ops::Deref<Target = T>>
             "CreateSession",
             (options,),
         )
-        .and_then(|r: (dbus::Path<'static>,)| Ok(r.0))
+        .map(|r: (dbus::Path<'static>,)| r.0)
     }
 
     fn select_devices(
@@ -265,7 +265,7 @@ impl<'a, T: blocking::BlockingSender, C: ::std::ops::Deref<Target = T>>
             "SelectDevices",
             (session_handle, options),
         )
-        .and_then(|r: (dbus::Path<'static>,)| Ok(r.0))
+        .map(|r: (dbus::Path<'static>,)| r.0)
     }
 
     fn start(
@@ -279,7 +279,7 @@ impl<'a, T: blocking::BlockingSender, C: ::std::ops::Deref<Target = T>>
             "Start",
             (session_handle, parent_window, options),
         )
-        .and_then(|r: (dbus::Path<'static>,)| Ok(r.0))
+        .map(|r: (dbus::Path<'static>,)| r.0)
     }
 
     fn notify_pointer_motion(
@@ -436,7 +436,7 @@ impl<'a, T: blocking::BlockingSender, C: ::std::ops::Deref<Target = T>>
             "ConnectToEIS",
             (session_handle, options),
         )
-        .and_then(|r: (arg::OwnedFd,)| Ok(r.0))
+        .map(|r: (arg::OwnedFd,)| r.0)
     }
 
     fn available_device_types(&self) -> Result<u32, dbus::Error> {

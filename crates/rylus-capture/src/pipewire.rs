@@ -182,7 +182,8 @@ impl PipeWireRecorder {
             .map_err(|e| PipeWireError(format!("Failed to create PipeWire main loop: {}", e)))?;
         let context = pw::context::ContextRc::new(&mainloop, None)
             .map_err(|e| PipeWireError(format!("Failed to create PipeWire context: {}", e)))?;
-        let core = context.connect_fd_rc(duped_fd, None)
+        let core = context
+            .connect_fd_rc(duped_fd, None)
             .map_err(|e| PipeWireError(format!("Failed to connect to PipeWire via fd: {}", e)))?;
 
         let stream = pw::stream::StreamRc::new(
@@ -631,11 +632,15 @@ fn streams_from_response(response: &OrgFreedesktopPortalRequestResponse) -> Vec<
                 .filter_map(|stream| {
                     let mut itr = stream.as_iter()?;
                     let path = itr.next()?.as_u64()?;
-                    let (keys, values): (Vec<(usize, &dyn RefArg)>, Vec<(usize, &dyn RefArg)>) =
-                        itr.next()?
-                            .as_iter()?
-                            .enumerate()
-                            .partition(|(i, _)| i % 2 == 0);
+                    #[allow(clippy::type_complexity)]
+                    let (keys, values): (
+                        Vec<(usize, &dyn RefArg)>,
+                        Vec<(usize, &dyn RefArg)>,
+                    ) = itr
+                        .next()?
+                        .as_iter()?
+                        .enumerate()
+                        .partition(|(i, _)| i % 2 == 0);
                     let attributes = keys
                         .iter()
                         .filter_map(|(_, key)| Some(key.as_str()?.to_owned()))
@@ -693,7 +698,11 @@ fn on_create_session_response(
         .into();
 
     context.lock().expect("context mutex poisoned").session = session.clone();
-    if context.lock().expect("context mutex poisoned").has_remote_desktop {
+    if context
+        .lock()
+        .expect("context mutex poisoned")
+        .has_remote_desktop
+    {
         select_devices(portal, context)
     } else {
         select_sources(portal, context)
@@ -715,7 +724,7 @@ fn select_devices(
     // 0: Do not persist (default)
     // 1: Permissions persist as long as the application is running
     // 2: Permissions persist until explicitly revoked
-    args.insert("persist_mode".to_string(), Variant(Box::new(2 as u32)));
+    args.insert("persist_mode".to_string(), Variant(Box::new(2u32)));
 
     // device types
     // 1: KEYBOARD
@@ -727,10 +736,20 @@ fn select_devices(
 
     // Register handler BEFORE making the call to avoid missing the response.
     let expected_path = request_path(portal.connection, &handle_token);
-    register_response_handler(portal.connection, expected_path, context.clone(), |_, portal, _, context| {
-        select_sources(portal, context)
-    })?;
-    portal.select_devices(context.lock().expect("context mutex poisoned").session.clone(), args)?;
+    register_response_handler(
+        portal.connection,
+        expected_path,
+        context.clone(),
+        |_, portal, _, context| select_sources(portal, context),
+    )?;
+    portal.select_devices(
+        context
+            .lock()
+            .expect("context mutex poisoned")
+            .session
+            .clone(),
+        args,
+    )?;
     Ok(())
 }
 
@@ -757,7 +776,10 @@ fn select_sources(
     debug!("Available source types: {source_types}.");
     args.insert("types".into(), Variant(Box::new(source_types)));
 
-    let capture_cursor = context.lock().expect("context mutex poisoned").capture_cursor;
+    let capture_cursor = context
+        .lock()
+        .expect("context mutex poisoned")
+        .capture_cursor;
     // Cursor modes (bitmask):
     // 1: Hidden — cursor is not part of the screen cast stream.
     // 2: Embedded — cursor is embedded as part of the stream buffers.
@@ -770,8 +792,7 @@ fn select_sources(
             debug!("Selected cursor mode: Metadata (4)");
             4u32
         } else if available & 2 != 0 {
-            let is_plasma =
-                std::env::var("DESKTOP_SESSION").map_or(false, |s| s.contains("plasma"));
+            let is_plasma = std::env::var("DESKTOP_SESSION").is_ok_and(|s| s.contains("plasma"));
             if is_plasma {
                 // Warn about KDE cursor capture crash:
                 // https://bugs.kde.org/show_bug.cgi?id=435042
@@ -793,8 +814,20 @@ fn select_sources(
 
     // Register handler BEFORE making the call to avoid missing the response.
     let expected_path = request_path(portal.connection, &handle_token);
-    register_response_handler(portal.connection, expected_path, context.clone(), on_select_sources_response)?;
-    portal.select_sources(context.lock().expect("context mutex poisoned").session.clone(), args)?;
+    register_response_handler(
+        portal.connection,
+        expected_path,
+        context.clone(),
+        on_select_sources_response,
+    )?;
+    portal.select_sources(
+        context
+            .lock()
+            .expect("context mutex poisoned")
+            .session
+            .clone(),
+        args,
+    )?;
     Ok(())
 }
 
@@ -814,19 +847,36 @@ fn on_select_sources_response(
 
     // Register handler BEFORE making the call to avoid missing the response.
     let expected_path = request_path(portal.connection, &handle_token);
-    register_response_handler(portal.connection, expected_path, context.clone(), on_start_response)?;
+    register_response_handler(
+        portal.connection,
+        expected_path,
+        context.clone(),
+        on_start_response,
+    )?;
 
-    if context.lock().expect("context mutex poisoned").has_remote_desktop {
+    if context
+        .lock()
+        .expect("context mutex poisoned")
+        .has_remote_desktop
+    {
         OrgFreedesktopPortalRemoteDesktop::start(
             &portal,
-            context.lock().expect("context mutex poisoned").session.clone(),
+            context
+                .lock()
+                .expect("context mutex poisoned")
+                .session
+                .clone(),
             "",
             args,
         )?;
     } else {
         OrgFreedesktopPortalScreenCast::start(
             &portal,
-            context.lock().expect("context mutex poisoned").session.clone(),
+            context
+                .lock()
+                .expect("context mutex poisoned")
+                .session
+                .clone(),
             "",
             args,
         )?;
@@ -869,8 +919,7 @@ fn request_remote_desktop(
 
     // Disabled for KDE plasma due to https://bugs.kde.org/show_bug.cgi?id=484996
     // List of supported DEs: https://wiki.archlinux.org/title/XDG_Desktop_Portal#List_of_backends_and_interfaces
-    let has_remote_desktop =
-        std::env::var("DESKTOP_SESSION").map_or(false, |s| s.contains("gnome"));
+    let has_remote_desktop = std::env::var("DESKTOP_SESSION").is_ok_and(|s| s.contains("gnome"));
 
     let context = CallBackContext {
         capture_cursor,
@@ -897,7 +946,12 @@ fn request_remote_desktop(
 
     // Register handler BEFORE making the call to avoid missing the response.
     let expected_path = request_path(&conn, &handle_token);
-    register_response_handler(&conn, expected_path, context.clone(), on_create_session_response)?;
+    register_response_handler(
+        &conn,
+        expected_path,
+        context.clone(),
+        on_create_session_response,
+    )?;
 
     if has_remote_desktop {
         OrgFreedesktopPortalRemoteDesktop::create_session(&portal, args)?;

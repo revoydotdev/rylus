@@ -1,5 +1,5 @@
-pub mod enigo_device;
 pub mod device;
+pub mod enigo_device;
 
 #[cfg(target_os = "windows")]
 pub mod enigo_device_win;
