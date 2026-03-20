@@ -1,11 +1,10 @@
 FROM debian:bullseye
 ENV RUSTUP_HOME="/usr/local/rustup" CARGO_HOME="/usr/local/cargo" PATH="/usr/local/cargo/bin:$PATH"
 RUN apt-get update && \
-   apt-get install -y libx11-dev libxext-dev libxft-dev libxinerama-dev libxcursor-dev \
-   libxrender-dev libxfixes-dev libgl1-mesa-dev libglu1-mesa-dev libxtst-dev cmake git curl \
-   software-properties-common zip libssl-dev libxrandr-dev libxcomposite-dev libxi-dev \
-   gcc g++ autoconf libtool-bin libxv-dev libdrm-dev libpango1.0-dev pkg-config mingw-w64 \
-   libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libdbus-1-dev libxcb-dri3-dev clang  \
+   apt-get install -y libgl1-mesa-dev libglu1-mesa-dev cmake git curl \
+   software-properties-common zip libssl-dev \
+   gcc g++ autoconf libtool-bin libdrm-dev pkg-config mingw-w64 \
+   libpipewire-0.3-dev libdbus-1-dev clang \
    libwayland-dev libxkbcommon-dev
 RUN apt-add-repository contrib
 RUN apt-add-repository non-free

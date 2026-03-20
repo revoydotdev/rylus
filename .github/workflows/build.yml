@@ -13,6 +13,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v6
+    - name: Install system dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y libpipewire-0.3-dev libdbus-1-dev pkg-config clang
     - uses: dtolnay/rust-toolchain@stable
       with:
         components: clippy, rustfmt
