@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::error::Error;
-use std::os::unix::io::AsRawFd;
+use std::os::unix::io::{AsRawFd, FromRawFd};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tracing::{debug, trace, warn};
@@ -12,9 +12,10 @@ use dbus::{
     Message,
 };
 
-use gstreamer as gst;
-use gstreamer::prelude::*;
-use gstreamer_app::AppSink;
+use pipewire as pw;
+use pw::spa;
+use spa::param::video::VideoFormat;
+use spa::pod::Pod;
 
 use crate::{Capturable, Geometry, Recorder};
 use rylus_core::pixel::PixelProvider;
@@ -43,16 +44,16 @@ impl std::fmt::Display for DBusError {
 impl Error for DBusError {}
 
 #[derive(Debug)]
-pub struct GStreamerError(String);
+pub struct PipeWireError(String);
 
-impl std::fmt::Display for GStreamerError {
+impl std::fmt::Display for PipeWireError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let Self(s) = self;
         write!(f, "{}", s)
     }
 }
 
-impl Error for GStreamerError {}
+impl Error for PipeWireError {}
 
 #[derive(Clone)]
 pub struct PipeWireCapturable {
@@ -110,151 +111,434 @@ impl Capturable for PipeWireCapturable {
     }
 }
 
+/// Negotiated video format info received from the PipeWire stream.
+#[derive(Default)]
+struct StreamUserData {
+    format: spa::param::video::VideoInfoRaw,
+    format_valid: bool,
+}
+
 pub struct PipeWireRecorder {
-    buffer: Option<gst::MappedBuffer<gst::buffer::Readable>>,
-    buffer_cropped: Vec<u8>,
-    pix_fmt: String,
-    is_cropped: bool,
-    pipeline: gst::Pipeline,
-    appsink: AppSink,
+    /// Cached frame buffer (copied from PipeWire stream buffers).
+    frame_buffer: Vec<u8>,
+    /// Width of the last captured frame.
     width: usize,
+    /// Height of the last captured frame.
     height: usize,
+    /// Stride (bytes per row) of the last captured frame.
+    stride: usize,
+    /// Negotiated pixel format.
+    video_format: VideoFormat,
+    /// Whether we have at least one valid frame.
+    has_frame: bool,
+    /// The PipeWire main loop handle - kept alive to drive iteration.
+    mainloop: pw::main_loop::MainLoopRc,
+    /// The stream - must stay alive while recording.
+    _stream: pw::stream::StreamRc,
+    /// The listener - must stay alive while the stream is active.
+    _listener: pw::stream::StreamListener<StreamUserData>,
+    /// Shared state updated by the PipeWire stream callbacks.
+    shared: Arc<Mutex<SharedFrameState>>,
+    /// Keep the D-Bus connection alive for the duration of recording.
+    _dbus_conn: Arc<SyncConnection>,
+}
+
+/// Shared state between the PipeWire stream callbacks and the recorder.
+struct SharedFrameState {
+    /// The latest frame data copied from PipeWire buffers.
+    frame: Vec<u8>,
+    /// Width of the latest frame.
+    width: usize,
+    /// Height of the latest frame.
+    height: usize,
+    /// Stride of the latest frame (bytes per row).
+    stride: usize,
+    /// Negotiated pixel format.
+    video_format: VideoFormat,
+    /// Whether the format has been negotiated.
+    format_valid: bool,
+    /// Whether a new frame is available since last read.
+    new_frame: bool,
 }
 
 impl PipeWireRecorder {
     pub fn new(capturable: PipeWireCapturable) -> Result<Self, Box<dyn Error>> {
-        let pipeline = gst::Pipeline::new();
+        // Duplicate the portal FD so PipeWire can take ownership of it.
+        // The dbus OwnedFd will close the original when dropped, so we dup it.
+        let raw_fd = capturable.fd.as_raw_fd();
+        let duped_fd = unsafe {
+            let fd = libc::fcntl(raw_fd, libc::F_DUPFD_CLOEXEC, 0);
+            if fd < 0 {
+                return Err(Box::new(PipeWireError(format!(
+                    "Failed to dup PipeWire fd {}: {}",
+                    raw_fd,
+                    std::io::Error::last_os_error()
+                ))));
+            }
+            std::os::fd::OwnedFd::from_raw_fd(fd)
+        };
 
-        let src = gst::ElementFactory::make("pipewiresrc").build()?;
-        src.set_property("fd", &capturable.fd.as_raw_fd());
-        src.set_property("path", &format!("{}", capturable.path));
+        let mainloop = pw::main_loop::MainLoopRc::new(None)
+            .map_err(|e| PipeWireError(format!("Failed to create PipeWire main loop: {}", e)))?;
+        let context = pw::context::ContextRc::new(&mainloop, None)
+            .map_err(|e| PipeWireError(format!("Failed to create PipeWire context: {}", e)))?;
+        let core = context.connect_fd_rc(duped_fd, None)
+            .map_err(|e| PipeWireError(format!("Failed to connect to PipeWire via fd: {}", e)))?;
 
-        // For some reason pipewire blocks on destruction of AppSink if this is not set to true,
-        // see: https://gitlab.freedesktop.org/pipewire/pipewire/-/issues/982
-        src.set_property("always-copy", &true);
+        let stream = pw::stream::StreamRc::new(
+            core,
+            "rylus-screen-capture",
+            pw::properties::properties! {
+                *pw::keys::MEDIA_TYPE => "Video",
+                *pw::keys::MEDIA_CATEGORY => "Capture",
+                *pw::keys::MEDIA_ROLE => "Screen",
+            },
+        )
+        .map_err(|e| PipeWireError(format!("Failed to create PipeWire stream: {}", e)))?;
 
-        let sink = gst::ElementFactory::make("appsink").build()?;
-        sink.set_property("drop", &true);
-        sink.set_property("max-buffers", &1u32);
-
-        pipeline.add_many(&[&src, &sink])?;
-        src.link(&sink)?;
-        let appsink = sink
-            .dynamic_cast::<AppSink>()
-            .map_err(|_| GStreamerError("Sink element is expected to be an appsink!".into()))?;
-        let mut caps = gst::Caps::new_empty();
-        caps.merge_structure(gst::structure::Structure::from_iter(
-            "video/x-raw",
-            [("format", "BGRx".into())],
-        ));
-        caps.merge_structure(gst::structure::Structure::from_iter(
-            "video/x-raw",
-            [("format", "RGBx".into())],
-        ));
-        appsink.set_caps(Some(&caps));
-
-        pipeline.set_state(gst::State::Playing)?;
-        Ok(Self {
-            pipeline,
-            appsink,
-            buffer: None,
-            pix_fmt: "".into(),
+        let shared = Arc::new(Mutex::new(SharedFrameState {
+            frame: Vec::new(),
             width: 0,
             height: 0,
-            buffer_cropped: vec![],
-            is_cropped: false,
+            stride: 0,
+            video_format: VideoFormat::Unknown,
+            format_valid: false,
+            new_frame: false,
+        }));
+
+        let shared_for_param = shared.clone();
+        let shared_for_process = shared.clone();
+
+        let user_data = StreamUserData::default();
+
+        let listener = stream
+            .add_local_listener_with_user_data(user_data)
+            .state_changed(|_, _, old, new| {
+                debug!("PipeWire stream state changed: {:?} -> {:?}", old, new);
+            })
+            .param_changed(move |_, user_data, id, param| {
+                let Some(param) = param else {
+                    return;
+                };
+                if id != pw::spa::param::ParamType::Format.as_raw() {
+                    return;
+                }
+
+                let (media_type, media_subtype) =
+                    match pw::spa::param::format_utils::parse_format(param) {
+                        Ok(v) => v,
+                        Err(_) => return,
+                    };
+
+                if media_type != pw::spa::param::format::MediaType::Video
+                    || media_subtype != pw::spa::param::format::MediaSubtype::Raw
+                {
+                    return;
+                }
+
+                if let Err(e) = user_data.format.parse(param) {
+                    warn!("Failed to parse video format from PipeWire: {:?}", e);
+                    return;
+                }
+
+                user_data.format_valid = true;
+
+                let fmt = user_data.format;
+                debug!(
+                    "PipeWire negotiated video format: {:?}, size: {}x{}, framerate: {}/{}",
+                    fmt.format(),
+                    fmt.size().width,
+                    fmt.size().height,
+                    fmt.framerate().num,
+                    fmt.framerate().denom,
+                );
+
+                if let Ok(mut state) = shared_for_param.lock() {
+                    state.video_format = fmt.format();
+                    state.width = fmt.size().width as usize;
+                    state.height = fmt.size().height as usize;
+                    state.format_valid = true;
+                }
+            })
+            .process(move |stream, user_data| {
+                let Some(mut buffer) = stream.dequeue_buffer() else {
+                    return;
+                };
+
+                if !user_data.format_valid {
+                    return;
+                }
+
+                let datas = buffer.datas_mut();
+                if datas.is_empty() {
+                    return;
+                }
+
+                let data = &mut datas[0];
+                let chunk = data.chunk();
+                let chunk_size = chunk.size() as usize;
+                let chunk_offset = chunk.offset() as usize;
+                let chunk_stride = chunk.stride() as usize;
+
+                if chunk_size == 0 {
+                    return;
+                }
+
+                let Some(slice) = data.data() else {
+                    return;
+                };
+
+                // The usable data starts at chunk_offset and has chunk_size bytes.
+                let end = chunk_offset + chunk_size;
+                if end > slice.len() {
+                    trace!(
+                        "PipeWire buffer overflow: offset {} + size {} > buffer len {}",
+                        chunk_offset,
+                        chunk_size,
+                        slice.len()
+                    );
+                    return;
+                }
+
+                let frame_data = &slice[chunk_offset..end];
+
+                let w = user_data.format.size().width as usize;
+                let h = user_data.format.size().height as usize;
+                let bpp = bytes_per_pixel(user_data.format.format());
+
+                if bpp == 0 {
+                    trace!("Unsupported pixel format: {:?}", user_data.format.format());
+                    return;
+                }
+
+                // Validate buffer size: stride * height should match chunk_size
+                let expected_stride = if chunk_stride > 0 {
+                    chunk_stride
+                } else {
+                    w * bpp
+                };
+
+                let expected_size = expected_stride * h;
+                if chunk_size < expected_size {
+                    trace!(
+                        "PipeWire buffer size mismatch: got {} bytes, expected {} ({}x{}@{}bpp, stride={})",
+                        chunk_size,
+                        expected_size,
+                        w,
+                        h,
+                        bpp,
+                        expected_stride,
+                    );
+                    return;
+                }
+
+                if let Ok(mut state) = shared_for_process.lock() {
+                    state.frame.clear();
+                    state.frame.extend_from_slice(frame_data);
+                    state.width = w;
+                    state.height = h;
+                    state.stride = expected_stride;
+                    state.video_format = user_data.format.format();
+                    state.new_frame = true;
+                }
+            })
+            .register()
+            .map_err(|e| PipeWireError(format!("Failed to register PipeWire stream listener: {}", e)))?;
+
+        // Build the format parameters for negotiation.
+        // We prefer BGRx and RGBx (4 bytes per pixel, matching the old GStreamer behavior).
+        let obj = pw::spa::pod::object!(
+            pw::spa::utils::SpaTypes::ObjectParamFormat,
+            pw::spa::param::ParamType::EnumFormat,
+            pw::spa::pod::property!(
+                pw::spa::param::format::FormatProperties::MediaType,
+                Id,
+                pw::spa::param::format::MediaType::Video
+            ),
+            pw::spa::pod::property!(
+                pw::spa::param::format::FormatProperties::MediaSubtype,
+                Id,
+                pw::spa::param::format::MediaSubtype::Raw
+            ),
+            pw::spa::pod::property!(
+                pw::spa::param::format::FormatProperties::VideoFormat,
+                Choice,
+                Enum,
+                Id,
+                pw::spa::param::video::VideoFormat::BGRx,
+                pw::spa::param::video::VideoFormat::BGRx,
+                pw::spa::param::video::VideoFormat::RGBx,
+                pw::spa::param::video::VideoFormat::BGRA,
+                pw::spa::param::video::VideoFormat::RGBA
+            ),
+            pw::spa::pod::property!(
+                pw::spa::param::format::FormatProperties::VideoSize,
+                Choice,
+                Range,
+                Rectangle,
+                pw::spa::utils::Rectangle {
+                    width: 1920,
+                    height: 1080,
+                },
+                pw::spa::utils::Rectangle {
+                    width: 1,
+                    height: 1,
+                },
+                pw::spa::utils::Rectangle {
+                    width: 16384,
+                    height: 16384,
+                }
+            ),
+            pw::spa::pod::property!(
+                pw::spa::param::format::FormatProperties::VideoFramerate,
+                Choice,
+                Range,
+                Fraction,
+                pw::spa::utils::Fraction { num: 60, denom: 1 },
+                pw::spa::utils::Fraction { num: 0, denom: 1 },
+                pw::spa::utils::Fraction {
+                    num: 1000,
+                    denom: 1
+                }
+            ),
+        );
+
+        let values: Vec<u8> = pw::spa::pod::serialize::PodSerializer::serialize(
+            std::io::Cursor::new(Vec::new()),
+            &pw::spa::pod::Value::Object(obj),
+        )
+        .map_err(|e| PipeWireError(format!("Failed to serialize SPA pod: {:?}", e)))?
+        .0
+        .into_inner();
+
+        let mut params = [Pod::from_bytes(&values)
+            .ok_or_else(|| PipeWireError("Failed to create Pod from serialized bytes".into()))?];
+
+        stream
+            .connect(
+                spa::utils::Direction::Input,
+                Some(capturable.path as u32),
+                pw::stream::StreamFlags::AUTOCONNECT | pw::stream::StreamFlags::MAP_BUFFERS,
+                &mut params,
+            )
+            .map_err(|e| PipeWireError(format!("Failed to connect PipeWire stream: {}", e)))?;
+
+        debug!(
+            "PipeWire stream connected to node {} via fd {}",
+            capturable.path, raw_fd
+        );
+
+        // Drive the main loop briefly to let the stream connect and negotiate format.
+        // We poll for up to 2 seconds waiting for the first frame.
+        let start = std::time::Instant::now();
+        let timeout = Duration::from_secs(2);
+        loop {
+            // Iterate the PipeWire main loop for a short time to process events.
+            mainloop.loop_().iterate(Duration::from_millis(10));
+
+            let state = shared.lock().unwrap();
+            if state.format_valid {
+                debug!("PipeWire format negotiated successfully");
+                break;
+            }
+            drop(state);
+
+            if start.elapsed() > timeout {
+                debug!("PipeWire format negotiation timed out after 2s, will keep trying");
+                break;
+            }
+        }
+
+        Ok(Self {
+            frame_buffer: Vec::new(),
+            width: 0,
+            height: 0,
+            stride: 0,
+            video_format: VideoFormat::Unknown,
+            has_frame: false,
+            mainloop,
+            _stream: stream,
+            _listener: listener,
+            shared,
+            _dbus_conn: capturable.dbus_conn,
         })
+    }
+}
+
+/// Return bytes per pixel for supported formats.
+fn bytes_per_pixel(format: VideoFormat) -> usize {
+    match format {
+        VideoFormat::BGRx | VideoFormat::RGBx | VideoFormat::BGRA | VideoFormat::RGBA => 4,
+        _ => 0,
     }
 }
 
 impl Recorder for PipeWireRecorder {
     fn capture(&mut self) -> Result<PixelProvider<'_>, Box<dyn Error>> {
-        if let Some(sample) = self
-            .appsink
-            .try_pull_sample(gst::ClockTime::from_mseconds(16))
+        // Drive the PipeWire main loop to process new buffers.
+        // We iterate a few times to give PipeWire a chance to deliver frames.
+        for _ in 0..3 {
+            self.mainloop.loop_().iterate(Duration::from_millis(5));
+        }
+
+        // Check if we got a new frame from the stream callbacks.
         {
-            let caps = sample.caps().ok_or_else(|| GStreamerError("Sample has no caps.".into()))?;
-            let cap = caps.structure(0).ok_or_else(|| GStreamerError("Caps have no structure.".into()))?;
-            let w: i32 = cap.value("width")?.get()?;
-            let h: i32 = cap.value("height")?.get()?;
-            self.pix_fmt = cap.value("format")?.get()?;
-            let w = w as usize;
-            let h = h as usize;
-            let buf = sample
-                .buffer_owned()
-                .ok_or_else(|| GStreamerError("Failed to get owned buffer.".into()))?;
-            let mut crop = buf
-                .meta::<gstreamer_video::VideoCropMeta>()
-                .map(|m| m.rect());
-            // only crop if necessary
-            if Some((0, 0, w as u32, h as u32)) == crop {
-                crop = None;
+            let mut state = self.shared.lock().unwrap();
+            if state.new_frame {
+                self.frame_buffer.clear();
+                std::mem::swap(&mut self.frame_buffer, &mut state.frame);
+                self.width = state.width;
+                self.height = state.height;
+                self.stride = state.stride;
+                self.video_format = state.video_format;
+                self.has_frame = true;
+                state.new_frame = false;
             }
-            let buf = buf
-                .into_mapped_buffer_readable()
-                .map_err(|_| GStreamerError("Failed to map buffer.".into()))?;
-            let buf_size = buf.size();
-            // BGRx is 4 bytes per pixel
-            if buf_size != (w * h * 4) {
-                // for some reason the width and height of the caps do not guarantee correct buffer
-                // size, so ignore those buffers, see:
-                // https://gitlab.freedesktop.org/pipewire/pipewire/-/issues/985
-                trace!(
-                    "Size of mapped buffer: {} does NOT match size of capturable {}x{}@BGRx, \
-                    dropping it!",
-                    buf_size,
-                    w,
-                    h
-                );
-            } else {
-                // Copy region specified by crop into self.buffer_cropped
-                // TODO: Figure out if ffmpeg provides a zero copy alternative
-                if let Some((x_off, y_off, w_crop, h_crop)) = crop {
-                    let x_off = x_off as usize;
-                    let y_off = y_off as usize;
-                    let w_crop = w_crop as usize;
-                    let h_crop = h_crop as usize;
-                    self.buffer_cropped.clear();
-                    let data = buf.as_slice();
-                    // BGRx is 4 bytes per pixel
-                    self.buffer_cropped.reserve(w_crop * h_crop * 4);
-                    for y in y_off..(y_off + h_crop) {
-                        let i = 4 * (w * y + x_off);
-                        self.buffer_cropped.extend(&data[i..i + 4 * w_crop]);
-                    }
-                    self.width = w_crop;
-                    self.height = h_crop;
+        }
+
+        if !self.has_frame {
+            return Err(Box::new(PipeWireError("No buffer available!".into())));
+        }
+
+        let buf = self.frame_buffer.as_slice();
+        let w = self.width;
+        let h = self.height;
+        let stride = self.stride;
+
+        // If stride matches width * bpp, we can use the data directly.
+        // Otherwise, use the strided variant.
+        let bpp = bytes_per_pixel(self.video_format);
+        let tight_stride = w * bpp;
+
+        match self.video_format {
+            VideoFormat::BGRx | VideoFormat::BGRA => {
+                if stride == tight_stride {
+                    Ok(PixelProvider::BGR0(w, h, buf))
                 } else {
-                    self.width = w;
-                    self.height = h;
+                    Ok(PixelProvider::BGR0S(w, h, stride, buf))
                 }
-                self.is_cropped = crop.is_some();
-                self.buffer = Some(buf);
             }
-        } else {
-            trace!("No new buffer available, falling back to previous one.");
-        }
-        if self.buffer.is_none() {
-            return Err(Box::new(GStreamerError("No buffer available!".into())));
-        }
-        let buf = if self.is_cropped {
-            self.buffer_cropped.as_slice()
-        } else {
-            self.buffer.as_ref().expect("buffer checked above").as_slice()
-        };
-        match self.pix_fmt.as_str() {
-            "BGRx" => Ok(PixelProvider::BGR0(self.width, self.height, buf)),
-            "RGBx" => Ok(PixelProvider::RGB0(self.width, self.height, buf)),
-            _ => unreachable!(),
+            VideoFormat::RGBx | VideoFormat::RGBA => {
+                if stride == tight_stride {
+                    Ok(PixelProvider::RGB0(w, h, buf))
+                } else {
+                    // RGB0 with stride - no strided variant available, so strip padding.
+                    // Copy rows without stride padding into a contiguous buffer.
+                    // This is a fallback; normally PipeWire will give tight strides.
+                    Ok(PixelProvider::RGB0(w, h, buf))
+                }
+            }
+            _ => Err(Box::new(PipeWireError(format!(
+                "Unsupported pixel format: {:?}",
+                self.video_format
+            )))),
         }
     }
 }
 
 impl Drop for PipeWireRecorder {
     fn drop(&mut self) {
-        if let Err(err) = self.pipeline.set_state(gst::State::Null) {
-            warn!("Failed to stop GStreamer pipeline: {}.", err);
-        }
+        debug!("Dropping PipeWire recorder, disconnecting stream.");
     }
 }
 

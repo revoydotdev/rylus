@@ -54,13 +54,7 @@ fn main() {
         #[cfg(feature = "x11")]
         rylus_capture::x11::x11_init();
 
-        if let Err(err) = gstreamer::init() {
-            error!(
-                "Failed to initialize gstreamer, screen capturing will most likely not work \
-                 on Wayland: {}",
-                err
-            );
-        }
+        pipewire::init();
     }
 
     #[cfg(feature = "gui")]
