@@ -241,3 +241,157 @@ pub fn get_config() -> Config {
     }
     config
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn config_default_values() {
+        let config = Config::parse_from::<_, &str>(["rylus"]);
+        assert_eq!(config.web_port, 1701);
+        assert_eq!(config.bind_address, "0.0.0.0".parse::<IpAddr>().unwrap());
+        assert!(config.access_code.is_none());
+        assert!(!config.auto_start);
+        assert!(!config.no_gui);
+    }
+
+    #[test]
+    fn config_parse_cli_args() {
+        let config = Config::parse_from([
+            "rylus",
+            "--access-code", "secret123",
+            "--bind-address", "127.0.0.1",
+            "--web-port", "8080",
+            "--auto-start",
+            "--no-gui",
+        ]);
+        assert_eq!(config.access_code.as_deref(), Some("secret123"));
+        assert_eq!(config.bind_address, "127.0.0.1".parse::<IpAddr>().unwrap());
+        assert_eq!(config.web_port, 8080);
+        assert!(config.auto_start);
+        assert!(config.no_gui);
+    }
+
+    #[test]
+    fn config_toml_roundtrip() {
+        let config = Config::parse_from([
+            "rylus",
+            "--access-code", "mycode",
+            "--web-port", "9999",
+        ]);
+        let toml_str = toml::to_string_pretty(&config).unwrap();
+        let back: Config = toml::from_str(&toml_str).unwrap();
+        assert_eq!(back.access_code.as_deref(), Some("mycode"));
+        assert_eq!(back.web_port, 9999);
+    }
+
+    #[test]
+    fn config_toml_minimal() {
+        // A minimal TOML with only required fields should parse
+        let toml_str = r#"
+bind_address = "0.0.0.0"
+web_port = 1701
+"#;
+        let config: Config = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.web_port, 1701);
+        assert!(config.access_code.is_none());
+    }
+
+    #[test]
+    fn config_toml_with_access_code() {
+        let toml_str = r#"
+bind_address = "192.168.1.100"
+web_port = 3000
+access_code = "hunter2"
+"#;
+        let config: Config = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.access_code.as_deref(), Some("hunter2"));
+        assert_eq!(config.bind_address, "192.168.1.100".parse::<IpAddr>().unwrap());
+    }
+
+    #[test]
+    fn config_toml_invalid_address_fails() {
+        let toml_str = r#"
+bind_address = "not.an.ip"
+web_port = 1701
+"#;
+        let result = toml::from_str::<Config>(toml_str);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn config_toml_ipv6_address() {
+        let toml_str = r#"
+bind_address = "::1"
+web_port = 1701
+"#;
+        let config: Config = toml::from_str(toml_str).unwrap();
+        assert!(config.bind_address.is_ipv6());
+    }
+
+    #[test]
+    fn theme_type_default_is_greybird() {
+        assert_eq!(ThemeType::default(), ThemeType::Greybird);
+    }
+
+    #[test]
+    fn theme_type_to_index_from_index_roundtrip() {
+        for (i, theme) in ThemeType::themes().iter().enumerate() {
+            assert_eq!(theme.to_index(), i as i32);
+            assert_eq!(ThemeType::from_index(i as i32), *theme);
+        }
+    }
+
+    #[test]
+    fn theme_type_from_index_clamps() {
+        let t = ThemeType::from_index(-1);
+        assert_eq!(t, ThemeType::themes()[0]);
+        let t = ThemeType::from_index(100);
+        assert_eq!(t, *ThemeType::themes().last().unwrap());
+    }
+
+    #[test]
+    fn theme_type_name() {
+        assert_eq!(ThemeType::Dark.name(), "Dark");
+        assert_eq!(ThemeType::Metro.name(), "Metro");
+    }
+
+    #[test]
+    fn theme_list_length() {
+        assert_eq!(ThemeType::themes().len(), 8);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn config_toml_with_linux_flags() {
+        let toml_str = r#"
+bind_address = "0.0.0.0"
+web_port = 1701
+try_vaapi = true
+try_nvenc = false
+"#;
+        let config: Config = toml::from_str(toml_str).unwrap();
+        assert!(config.try_vaapi);
+        assert!(!config.try_nvenc);
+    }
+
+    #[test]
+    fn config_parse_gui_theme() {
+        let config = Config::parse_from([
+            "rylus",
+            "--gui-theme", "dark",
+        ]);
+        assert_eq!(config.gui_theme, Some(ThemeType::Dark));
+    }
+
+    #[test]
+    fn config_toml_skips_transient_fields() {
+        // print_index_html and custom_index_html are marked #[serde(skip)]
+        // so they should not appear in serialized output
+        let config = Config::parse_from(["rylus", "--print-index-html"]);
+        let toml_str = toml::to_string_pretty(&config).unwrap();
+        assert!(!toml_str.contains("print_index_html"));
+        assert!(!toml_str.contains("custom_index_html"));
+    }
+}
