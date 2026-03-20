@@ -1,5 +1,30 @@
 # Changelog
 
+## [0.15.0] - 2026-03-19
+
+### Changed
+
+- **Pure Rust X11 capture:** Replaced 785 lines of C code (xcapture.c,
+  xhelper.c) with x11rb crate. Eliminated rylus-ffi crate and 6 system
+  library link deps. Zero custom C code remains in the project.
+- **Direct PipeWire capture:** Replaced GStreamer dependency chain (~30
+  transitive C libraries) with direct pipewire-rs bindings for Wayland
+  screen capture
+- **Official Windows bindings:** Migrated from community winapi crate to
+  Microsoft's official windows crate with safe COM wrappers and Result
+  error handling
+- **Pure Rust GUI:** Replaced fltk-rs (C++ FLTK bindings) with egui/eframe.
+  New hero action layout, custom Rylus dark/light theme per DESIGN.md,
+  QR code on all platforms, inline contextual errors, first-run hints
+
+### Removed
+
+- `rylus-ffi` crate (C FFI compilation layer)
+- All C source files: xcapture.c, xhelper.c, xhelper.h, error.h, log.h
+- `gstreamer`, `gstreamer-app`, `gstreamer-video` dependencies
+- `winapi`, `wio` dependencies
+- `fltk` dependency and 8-theme picker
+
 ## [0.14.0] - 2026-03-19
 
 ### Added
