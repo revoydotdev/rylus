@@ -55,10 +55,6 @@ jobs:
     - uses: actions/checkout@v6
     - uses: actions/cache@v5
       with:
-        path: deps/dist*
-        key: ${{ runner.os }}-deps-${{ hashFiles('deps/*.sh', 'deps/*.patch') }}
-    - uses: actions/cache@v5
-      with:
         path: |
           ~/.cargo/registry
           ~/.cargo/git
@@ -77,11 +73,6 @@ jobs:
       with:
         name: linux-deb
         path: packages/Rylus*.deb
-    - name: Artifacts3
-      uses: actions/upload-artifact@v6
-      with:
-        name: windows
-        path: packages/rylus-windows.zip
     - name: Publish
       uses: softprops/action-gh-release@v2
       if: startsWith(github.ref, 'refs/tags/')
@@ -89,7 +80,6 @@ jobs:
           files: |
             packages/rylus-linux.zip
             packages/Rylus*.deb
-            packages/rylus-windows.zip
           prerelease: false
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -100,10 +90,6 @@ jobs:
     container: docker://hhmhh/weylus_build_alpine:latest
     steps:
     - uses: actions/checkout@v6
-    - uses: actions/cache@v5
-      with:
-        path: deps/dist*
-        key: ${{ runner.os }}-alpine-deps-${{ hashFiles('deps/*.sh', 'deps/*.patch') }}
     - uses: actions/cache@v5
       with:
         path: |
@@ -139,10 +125,9 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
     - uses: actions/checkout@v6
-    - uses: actions/cache@v5
+    - uses: actions/setup-node@v4
       with:
-        path: deps/dist
-        key: ${{ runner.os }}-deps-${{ hashFiles('deps/*.sh', 'deps/*.patch') }}
+        node-version: 22
     - uses: actions/cache@v5
       with:
         path: |
@@ -169,20 +154,6 @@ jobs:
       with:
         name: ${{ env.MACOS_BUILD_NAME }}
         path: target/release/bundle/osx/${{ env.MACOS_BUILD_NAME }}.zip
-    - name: ArtifactsDebug
-      if: failure()
-      uses: actions/upload-artifact@v6
-      with:
-        name: ${{ runner.os }}-ffbuild
-        path: |
-          deps/ffmpeg/ffbuild
-    - name: Debug via SSH
-      if: failure()
-      uses: luchihoratiu/debug-via-ssh@main
-      with:
-        NGROK_AUTH_TOKEN: ${{ secrets.NGROK_AUTH_TOKEN }}
-        SSH_PASS: ${{ secrets.SSH_PASS }}
-        NGROK_REGION: eu
     - name: Publish
       uses: softprops/action-gh-release@v2
       if: startsWith(github.ref, 'refs/tags/')
