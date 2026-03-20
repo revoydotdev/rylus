@@ -8,25 +8,29 @@ description = "Screen capture backends for Rylus"
 
 [features]
 default = []
-x11 = ["dep:rylus-ffi"]
+x11 = ["dep:x11rb", "dep:libc"]
 
 [dependencies]
 rylus-core = { workspace = true }
-rylus-ffi = { workspace = true, features = ["x11"], optional = true }
 tracing = { workspace = true }
+x11rb = { version = "0.13", features = ["shm", "randr", "xfixes", "xinput", "composite", "allow-unsafe-code"], optional = true }
+libc = { version = "0.2", optional = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 dbus = "^0.9"
 rand = "0.9"
-gstreamer = "^0.24"
-gstreamer-app = { version = "^0.24", features = ["v1_16"] }
-gstreamer-video = "^0.24"
+pipewire = "0.9"
+libc = "0.2"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 core-foundation = "^0.10"
 core-graphics = "^0.24"
 
 [target.'cfg(target_os = "windows")'.dependencies]
-winapi = { version = "0.3.9", features = ["d3d11", "d3dcommon", "dxgi", "dxgi1_2", "dxgitype"] }
-wio = "0.2.2"
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Dxgi",
+    "Win32_Graphics_Dxgi_Common",
+    "Win32_Graphics_Gdi",
+] }
 captrs = "^0.3.1"
