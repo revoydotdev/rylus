@@ -2,7 +2,7 @@ use crate::{Capturable, Geometry, Recorder};
 use captrs::Capturer;
 use std::boxed::Box;
 use std::error::Error;
-use winapi::shared::windef::RECT;
+use windows::Win32::Foundation::RECT;
 
 #[derive(Clone)]
 pub struct CaptrsCapturable {
@@ -68,14 +68,14 @@ impl CaptrsRecorder {
 }
 
 impl Recorder for CaptrsRecorder {
-    fn capture(&mut self) -> Result<crate::video::PixelProvider, Box<dyn Error>> {
+    fn capture(&mut self) -> Result<rylus_core::pixel::PixelProvider, Box<dyn Error>> {
         self.capturer
             .capture_store_frame()
             .map_err(|_e| CaptrsError("Captrs failed to capture frame".into()))?;
         let (w, h) = self.capturer.geometry();
         let frame = self.capturer.get_stored_frame()
             .ok_or_else(|| Box::new(CaptrsError("No frame available after capture".into())) as Box<dyn Error>)?;
-        Ok(crate::video::PixelProvider::BGR0(
+        Ok(rylus_core::pixel::PixelProvider::BGR0(
             w as usize,
             h as usize,
             // SAFETY: transmute extends the lifetime of the frame slice to match `self`;
