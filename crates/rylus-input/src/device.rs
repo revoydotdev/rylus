@@ -1,4 +1,4 @@
-use rylus_capture::Capturable;
+use rylus_core::Capturable;
 use rylus_core::protocol::{KeyboardEvent, PointerEvent, WheelEvent};
 
 #[derive(PartialEq, Eq)]

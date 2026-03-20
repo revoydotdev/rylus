@@ -173,7 +173,8 @@ impl Recorder for PipeWireRecorder {
             .appsink
             .try_pull_sample(gst::ClockTime::from_mseconds(16))
         {
-            let cap = sample.caps().unwrap().structure(0).unwrap();
+            let caps = sample.caps().ok_or_else(|| GStreamerError("Sample has no caps.".into()))?;
+            let cap = caps.structure(0).ok_or_else(|| GStreamerError("Caps have no structure.".into()))?;
             let w: i32 = cap.value("width")?.get()?;
             let h: i32 = cap.value("height")?.get()?;
             self.pix_fmt = cap.value("format")?.get()?;
@@ -239,7 +240,7 @@ impl Recorder for PipeWireRecorder {
         let buf = if self.is_cropped {
             self.buffer_cropped.as_slice()
         } else {
-            self.buffer.as_ref().unwrap().as_slice()
+            self.buffer.as_ref().expect("buffer checked above").as_slice()
         };
         match self.pix_fmt.as_str() {
             "BGRx" => Ok(PixelProvider::BGR0(self.width, self.height, buf)),
@@ -274,7 +275,7 @@ fn request_path(conn: &SyncConnection, handle_token: &str) -> dbus::Path<'static
     dbus::Path::new(format!(
         "/org/freedesktop/portal/desktop/request/{sender}/{handle_token}"
     ))
-    .unwrap()
+    .expect("constructed D-Bus path should be valid")
 }
 
 /// Register a signal handler for the portal Response signal BEFORE making
@@ -308,18 +309,18 @@ where
         match r.response {
             0 => {}
             1 => {
-                context.lock().unwrap().failure = true;
+                context.lock().expect("context mutex poisoned").failure = true;
                 warn!("DBus response: User cancelled interaction.");
                 return true;
             }
             c => {
-                context.lock().unwrap().failure = true;
+                context.lock().expect("context mutex poisoned").failure = true;
                 warn!("DBus response: Unknown error, code: {}.", c);
                 return true;
             }
         }
         if let Err(err) = f(r, portal, m, context.clone()) {
-            context.lock().unwrap().failure = true;
+            context.lock().expect("context mutex poisoned").failure = true;
             warn!("Error requesting screen capture via dbus: {}", err);
         }
         true
@@ -407,8 +408,8 @@ fn on_create_session_response(
         .to_string()
         .into();
 
-    context.lock().unwrap().session = session.clone();
-    if context.lock().unwrap().has_remote_desktop {
+    context.lock().expect("context mutex poisoned").session = session.clone();
+    if context.lock().expect("context mutex poisoned").has_remote_desktop {
         select_devices(portal, context)
     } else {
         select_sources(portal, context)
@@ -445,7 +446,7 @@ fn select_devices(
     register_response_handler(portal.connection, expected_path, context.clone(), |_, portal, _, context| {
         select_sources(portal, context)
     })?;
-    portal.select_devices(context.lock().unwrap().session.clone(), args)?;
+    portal.select_devices(context.lock().expect("context mutex poisoned").session.clone(), args)?;
     Ok(())
 }
 
@@ -472,7 +473,7 @@ fn select_sources(
     debug!("Available source types: {source_types}.");
     args.insert("types".into(), Variant(Box::new(source_types)));
 
-    let capture_cursor = context.lock().unwrap().capture_cursor;
+    let capture_cursor = context.lock().expect("context mutex poisoned").capture_cursor;
     // Cursor modes (bitmask):
     // 1: Hidden — cursor is not part of the screen cast stream.
     // 2: Embedded — cursor is embedded as part of the stream buffers.
@@ -509,7 +510,7 @@ fn select_sources(
     // Register handler BEFORE making the call to avoid missing the response.
     let expected_path = request_path(portal.connection, &handle_token);
     register_response_handler(portal.connection, expected_path, context.clone(), on_select_sources_response)?;
-    portal.select_sources(context.lock().unwrap().session.clone(), args)?;
+    portal.select_sources(context.lock().expect("context mutex poisoned").session.clone(), args)?;
     Ok(())
 }
 
@@ -531,17 +532,17 @@ fn on_select_sources_response(
     let expected_path = request_path(portal.connection, &handle_token);
     register_response_handler(portal.connection, expected_path, context.clone(), on_start_response)?;
 
-    if context.lock().unwrap().has_remote_desktop {
+    if context.lock().expect("context mutex poisoned").has_remote_desktop {
         OrgFreedesktopPortalRemoteDesktop::start(
             &portal,
-            context.lock().unwrap().session.clone(),
+            context.lock().expect("context mutex poisoned").session.clone(),
             "",
             args,
         )?;
     } else {
         OrgFreedesktopPortalScreenCast::start(
             &portal,
-            context.lock().unwrap().session.clone(),
+            context.lock().expect("context mutex poisoned").session.clone(),
             "",
             args,
         )?;
@@ -556,7 +557,7 @@ fn on_start_response(
     context: Arc<Mutex<CallBackContext>>,
 ) -> Result<(), Box<dyn Error>> {
     debug!("on_start_response");
-    let mut context = context.lock().unwrap();
+    let mut context = context.lock().expect("context mutex poisoned");
     context.streams.append(&mut streams_from_response(&r));
     let session = context.session.clone();
     context
@@ -624,7 +625,7 @@ fn request_remote_desktop(
     let timeout_iters = 300; // 300 * 100ms = 30s
     for _ in 0..timeout_iters {
         conn.process(Duration::from_millis(100))?;
-        let context = context.lock().unwrap();
+        let context = context.lock().expect("context mutex poisoned");
         if context.fd.is_some() {
             break;
         }
@@ -632,7 +633,7 @@ fn request_remote_desktop(
             break;
         }
     }
-    let context = context.lock().unwrap();
+    let context = context.lock().expect("context mutex poisoned");
     if context.failure {
         Err(Box::new(DBusError(
             "Portal request failed: user cancelled or an error occurred during \

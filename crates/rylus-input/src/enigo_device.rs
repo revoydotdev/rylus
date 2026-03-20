@@ -9,7 +9,7 @@ use rylus_core::protocol::{
     Button, KeyboardEvent, KeyboardEventType, PointerEvent, WheelEvent,
 };
 
-use rylus_capture::{Capturable, Geometry};
+use rylus_core::{Capturable, Geometry};
 
 pub struct EnigoDevice {
     enigo: Enigo,
@@ -46,11 +46,18 @@ impl InputDevice for EnigoDevice {
             warn!("Failed to activate window, sending no input ({})", err);
             return;
         }
-        let (x_rel, y_rel, width_rel, height_rel) = match self.capturable.geometry().unwrap() {
+        let geometry = match self.capturable.geometry() {
+            Ok(g) => g,
+            Err(e) => {
+                warn!("Failed to get window geometry, sending no input ({})", e);
+                return;
+            }
+        };
+        let (x_rel, y_rel, width_rel, height_rel) = match geometry {
             Geometry::Relative(x, y, width, height) => (x, y, width, height),
             #[cfg(target_os = "windows")]
-            _ => {
-                warn!("Failed to get window geometry, sending no input");
+            Geometry::VirtualScreen(..) => {
+                warn!("VirtualScreen geometry not supported by EnigoDevice, sending no input");
                 return;
             }
         };

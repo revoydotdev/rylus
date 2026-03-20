@@ -10,7 +10,7 @@ use evdev::{
 
 #[cfg(feature = "x11")]
 use rylus_capture::x11::X11Context;
-use rylus_capture::{Capturable, Geometry};
+use rylus_core::{Capturable, Geometry};
 
 use crate::device::{InputDevice, InputDeviceType};
 use rylus_core::error::CError;
@@ -394,7 +394,14 @@ impl InputDevice for UInputDevice {
             warn!("Failed to activate window, sending no input ({})", err);
             return;
         }
-        let (x, y, width, height) = match self.capturable.geometry().unwrap() {
+        let geometry = match self.capturable.geometry() {
+            Ok(g) => g,
+            Err(e) => {
+                warn!("Failed to get window geometry, sending no input ({})", e);
+                return;
+            }
+        };
+        let (x, y, width, height) = match geometry {
             Geometry::Relative(x, y, width, height) => (x, y, width, height),
         };
         self.geometry.x = x;
