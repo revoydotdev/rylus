@@ -11,7 +11,7 @@ name = "rylus"
 path = "src/main.rs"
 
 [features]
-default = []
+default = ["gui"]
 bench = []
 gui = ["dep:rylus-gui", "rylus-core/gui"]
 x11 = ["rylus-capture/x11", "rylus-input/x11"]
