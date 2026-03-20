@@ -238,7 +238,7 @@ async fn serve(
     match (req.method(), req.uri().path()) {
         (&Method::GET, "/settings") => {
             return Ok(
-                response_from_str(SETTINGS_HTML, "text/html; charset=utf-8").map(|r| r.boxed()),
+                response_from_str(SETTINGS_HTML, "text/html; charset=utf-8").map(|r| r.boxed())
             );
         }
         (&Method::GET, "/api/config") => {
@@ -384,7 +384,7 @@ async fn serve(
             };
             num_clients.fetch_add(1, Ordering::Relaxed);
 
-            let config = context.rylus_client_config.clone();
+            let config = context.rylus_client_config;
             tokio::spawn(async move {
                 match fut.await {
                     Ok(ws) => {
@@ -919,7 +919,9 @@ mod tests {
     fn session_store_token_is_alphanumeric() {
         let store = SessionStore::new();
         let token = store.create_session();
-        assert!(token.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit()));
+        assert!(token
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit()));
     }
 
     // ---- response helpers ----
@@ -929,7 +931,11 @@ mod tests {
         let resp = response_from_str("hello", "text/plain");
         assert_eq!(resp.status(), StatusCode::OK);
         assert_eq!(
-            resp.headers().get("content-type").unwrap().to_str().unwrap(),
+            resp.headers()
+                .get("content-type")
+                .unwrap()
+                .to_str()
+                .unwrap(),
             "text/plain"
         );
     }
@@ -945,7 +951,11 @@ mod tests {
         let resp = boxed_response(StatusCode::BAD_REQUEST, "text/plain", "bad");
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
         assert_eq!(
-            resp.headers().get("content-type").unwrap().to_str().unwrap(),
+            resp.headers()
+                .get("content-type")
+                .unwrap()
+                .to_str()
+                .unwrap(),
             "text/plain"
         );
     }
@@ -962,7 +972,12 @@ mod tests {
     fn web_server_config_no_access_code() {
         let config = WebServerConfig::new(
             "127.0.0.1:8080".parse().unwrap(),
-            None, None, None, None, None, false,
+            None,
+            None,
+            None,
+            None,
+            None,
+            false,
         );
         assert!(config.access_code.is_none());
         assert!(config.access_code_hash.is_none());
@@ -973,11 +988,18 @@ mod tests {
         let config = WebServerConfig::new(
             "0.0.0.0:1701".parse().unwrap(),
             Some("testcode".into()),
-            None, None, None, None, false,
+            None,
+            None,
+            None,
+            None,
+            false,
         );
         assert_eq!(config.access_code.as_deref(), Some("testcode"));
         assert!(config.access_code_hash.is_some());
         // The hash should verify against the original code
-        assert!(verify_access_code("testcode", config.access_code_hash.as_ref().unwrap()));
+        assert!(verify_access_code(
+            "testcode",
+            config.access_code_hash.as_ref().unwrap()
+        ));
     }
 }

@@ -5,13 +5,14 @@ use clap::Parser;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, warn};
 
-#[derive(clap::ValueEnum, Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(clap::ValueEnum, Serialize, Deserialize, Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub enum ThemeType {
     Aero,
     AquaClassic,
     Blue,
     Classic,
     Dark,
+    #[default]
     Greybird,
     HighContrast,
     Metro,
@@ -28,19 +29,16 @@ const THEME_LIST: [ThemeType; 8] = [
     ThemeType::Metro,
 ];
 
-impl Default for ThemeType {
-    fn default() -> Self {
-        Self::Greybird
-    }
-}
-
 impl ThemeType {
     pub fn name(&self) -> String {
         format!("{self:?}")
     }
 
     pub fn to_index(&self) -> i32 {
-        THEME_LIST.iter().position(|th| th == self).expect("Theme variant missing from THEME_LIST") as i32
+        THEME_LIST
+            .iter()
+            .position(|th| th == self)
+            .expect("Theme variant missing from THEME_LIST") as i32
     }
 
     pub fn from_index(i: i32) -> Self {
@@ -103,7 +101,10 @@ pub struct Config {
     #[serde(default)]
     pub no_gui: bool,
     #[cfg(target_os = "linux")]
-    #[arg(long, help = "Wayland/PipeWire Support (auto-detected from XDG_SESSION_TYPE).")]
+    #[arg(
+        long,
+        help = "Wayland/PipeWire Support (auto-detected from XDG_SESSION_TYPE)."
+    )]
     #[serde(default = "default_wayland_support", skip_serializing)]
     pub wayland_support: bool,
 
@@ -209,7 +210,10 @@ pub fn get_config() -> Config {
         Config::parse()
     };
     if config.web_port < 1024 {
-        warn!("Port {} is in the privileged range (< 1024) and may require elevated permissions.", config.web_port);
+        warn!(
+            "Port {} is in the privileged range (< 1024) and may require elevated permissions.",
+            config.web_port
+        );
     }
     // Auto-detect Wayland support at runtime unless the user explicitly passed
     // --wayland-support on the CLI to override.
@@ -241,9 +245,12 @@ mod tests {
     fn config_parse_cli_args() {
         let config = Config::parse_from([
             "rylus",
-            "--access-code", "secret123",
-            "--bind-address", "127.0.0.1",
-            "--web-port", "8080",
+            "--access-code",
+            "secret123",
+            "--bind-address",
+            "127.0.0.1",
+            "--web-port",
+            "8080",
             "--auto-start",
             "--no-gui",
         ]);
@@ -256,11 +263,7 @@ mod tests {
 
     #[test]
     fn config_toml_roundtrip() {
-        let config = Config::parse_from([
-            "rylus",
-            "--access-code", "mycode",
-            "--web-port", "9999",
-        ]);
+        let config = Config::parse_from(["rylus", "--access-code", "mycode", "--web-port", "9999"]);
         let toml_str = toml::to_string_pretty(&config).unwrap();
         let back: Config = toml::from_str(&toml_str).unwrap();
         assert_eq!(back.access_code.as_deref(), Some("mycode"));
@@ -288,7 +291,10 @@ access_code = "hunter2"
 "#;
         let config: Config = toml::from_str(toml_str).unwrap();
         assert_eq!(config.access_code.as_deref(), Some("hunter2"));
-        assert_eq!(config.bind_address, "192.168.1.100".parse::<IpAddr>().unwrap());
+        assert_eq!(
+            config.bind_address,
+            "192.168.1.100".parse::<IpAddr>().unwrap()
+        );
     }
 
     #[test]
@@ -359,10 +365,7 @@ try_nvenc = false
 
     #[test]
     fn config_parse_gui_theme() {
-        let config = Config::parse_from([
-            "rylus",
-            "--gui-theme", "dark",
-        ]);
+        let config = Config::parse_from(["rylus", "--gui-theme", "dark"]);
         assert_eq!(config.gui_theme, Some(ThemeType::Dark));
     }
 

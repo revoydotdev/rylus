@@ -1,17 +1,14 @@
-use std::cmp::min;
-use std::io::Cursor;
 use std::net::{IpAddr, SocketAddr};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 
 use eframe::egui;
-use tracing::{error, info, warn};
+use tracing::{info, warn};
 
 #[cfg(not(target_os = "windows"))]
 use pnet_datalink as datalink;
 
 use rylus_core::config::{write_config, Config};
-use rylus_core::protocol::{CustomInputAreas, Rect};
+use rylus_core::protocol::CustomInputAreas;
 pub use rylus_core::Web2UiMessage;
 
 use Web2UiMessage::UInputInaccessible;
@@ -23,7 +20,7 @@ use Web2UiMessage::UInputInaccessible;
 const ACCENT: egui::Color32 = egui::Color32::from_rgb(0x00, 0xAA, 0xFF);
 const ACCENT_HOVER: egui::Color32 = egui::Color32::from_rgb(0x33, 0xBB, 0xFF);
 const ERROR_COLOR: egui::Color32 = egui::Color32::from_rgb(0xEF, 0x44, 0x44);
-const SUCCESS_COLOR: egui::Color32 = egui::Color32::from_rgb(0x22, 0xC5, 0x5E);
+const _SUCCESS_COLOR: egui::Color32 = egui::Color32::from_rgb(0x22, 0xC5, 0x5E);
 const WARNING_COLOR: egui::Color32 = egui::Color32::from_rgb(0xF5, 0x9E, 0x0B);
 
 // Dark mode
@@ -69,6 +66,7 @@ enum ServerState {
     Stopped,
     Starting,
     Running,
+    #[allow(dead_code)]
     Error(String),
 }
 
@@ -335,11 +333,8 @@ impl RylusApp {
         if let Some(code) = &config.access_code {
             qr_url.push_str("?access_code=");
             qr_url.push_str(
-                &percent_encoding::utf8_percent_encode(
-                    code,
-                    percent_encoding::NON_ALPHANUMERIC,
-                )
-                .to_string(),
+                &percent_encoding::utf8_percent_encode(code, percent_encoding::NON_ALPHANUMERIC)
+                    .to_string(),
             );
         }
         self.qr_url = qr_url;
@@ -374,8 +369,7 @@ impl RylusApp {
         let img_buf = code.render::<Luma<u8>>().build();
         let dyn_image = image::DynamicImage::ImageLuma8(img_buf);
         let size = 256u32;
-        let dyn_image =
-            dyn_image.resize_exact(size, size, image::imageops::FilterType::Nearest);
+        let dyn_image = dyn_image.resize_exact(size, size, image::imageops::FilterType::Nearest);
         let rgba = dyn_image.to_rgba8();
         let pixels = rgba.as_flat_samples();
 
@@ -384,11 +378,8 @@ impl RylusApp {
             pixels.as_slice(),
         );
 
-        self.qr_texture = Some(ctx.load_texture(
-            "qr_code",
-            color_image,
-            egui::TextureOptions::NEAREST,
-        ));
+        self.qr_texture =
+            Some(ctx.load_texture("qr_code", color_image, egui::TextureOptions::NEAREST));
     }
 }
 
@@ -408,8 +399,7 @@ fn apply_rylus_theme(ctx: &egui::Context) {
         visuals.faint_bg_color = DARK_SURFACE;
         visuals.override_text_color = Some(DARK_TEXT);
         visuals.widgets.noninteractive.bg_fill = DARK_SURFACE;
-        visuals.widgets.noninteractive.fg_stroke =
-            egui::Stroke::new(1.0, DARK_TEXT_SECONDARY);
+        visuals.widgets.noninteractive.fg_stroke = egui::Stroke::new(1.0, DARK_TEXT_SECONDARY);
         visuals.widgets.noninteractive.bg_stroke = egui::Stroke::new(1.0, DARK_BORDER);
         visuals.widgets.inactive.bg_fill = DARK_SURFACE_RAISED;
         visuals.widgets.inactive.fg_stroke = egui::Stroke::new(1.0, DARK_TEXT);
@@ -418,8 +408,7 @@ fn apply_rylus_theme(ctx: &egui::Context) {
         visuals.widgets.hovered.fg_stroke = egui::Stroke::new(1.0, ACCENT_HOVER);
         visuals.widgets.hovered.bg_stroke = egui::Stroke::new(1.0, ACCENT);
         visuals.widgets.active.bg_fill = ACCENT;
-        visuals.widgets.active.fg_stroke =
-            egui::Stroke::new(1.0, egui::Color32::WHITE);
+        visuals.widgets.active.fg_stroke = egui::Stroke::new(1.0, egui::Color32::WHITE);
         visuals.widgets.active.bg_stroke = egui::Stroke::new(1.0, ACCENT);
         visuals.selection.bg_fill = ACCENT.linear_multiply(0.3);
         visuals.selection.stroke = egui::Stroke::new(1.0, ACCENT);
@@ -431,8 +420,7 @@ fn apply_rylus_theme(ctx: &egui::Context) {
         visuals.faint_bg_color = LIGHT_SURFACE;
         visuals.override_text_color = Some(LIGHT_TEXT);
         visuals.widgets.noninteractive.bg_fill = LIGHT_SURFACE;
-        visuals.widgets.noninteractive.fg_stroke =
-            egui::Stroke::new(1.0, LIGHT_TEXT_SECONDARY);
+        visuals.widgets.noninteractive.fg_stroke = egui::Stroke::new(1.0, LIGHT_TEXT_SECONDARY);
         visuals.widgets.noninteractive.bg_stroke = egui::Stroke::new(1.0, LIGHT_BORDER);
         visuals.widgets.inactive.bg_fill = LIGHT_SURFACE;
         visuals.widgets.inactive.fg_stroke = egui::Stroke::new(1.0, LIGHT_TEXT);
@@ -441,8 +429,7 @@ fn apply_rylus_theme(ctx: &egui::Context) {
         visuals.widgets.hovered.fg_stroke = egui::Stroke::new(1.0, ACCENT);
         visuals.widgets.hovered.bg_stroke = egui::Stroke::new(1.0, ACCENT);
         visuals.widgets.active.bg_fill = ACCENT;
-        visuals.widgets.active.fg_stroke =
-            egui::Stroke::new(1.0, egui::Color32::WHITE);
+        visuals.widgets.active.fg_stroke = egui::Stroke::new(1.0, egui::Color32::WHITE);
         visuals.widgets.active.bg_stroke = egui::Stroke::new(1.0, ACCENT);
         visuals.selection.bg_fill = ACCENT.linear_multiply(0.15);
         visuals.selection.stroke = egui::Stroke::new(1.0, ACCENT);
@@ -450,7 +437,7 @@ fn apply_rylus_theme(ctx: &egui::Context) {
     }
 
     // Shared: border radius from DESIGN.md (sm: 4px)
-    let rounding = egui::Rounding::same(4);
+    let rounding = egui::CornerRadius::same(4);
     visuals.widgets.noninteractive.corner_radius = rounding;
     visuals.widgets.inactive.corner_radius = rounding;
     visuals.widgets.hovered.corner_radius = rounding;
@@ -543,7 +530,7 @@ impl eframe::App for RylusApp {
                     )
                     .fill(button_color)
                     .min_size(egui::vec2(200.0, 48.0))
-                    .corner_radius(egui::Rounding::same(4));
+                    .corner_radius(egui::CornerRadius::same(4));
 
                     let response = ui.add_enabled(!is_starting, button);
                     if response.clicked() {
@@ -801,11 +788,7 @@ impl eframe::App for RylusApp {
     }
 }
 
-pub fn run(
-    config: &Config,
-    log_receiver: mpsc::Receiver<String>,
-    rylus: Box<dyn RylusServer>,
-) {
+pub fn run(config: &Config, log_receiver: mpsc::Receiver<String>, rylus: Box<dyn RylusServer>) {
     let native_options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([660.0, 600.0])
@@ -840,10 +823,8 @@ pub fn run(
 // dialog for the user to confirm the selection.
 // ---------------------------------------------------------------------------
 
-static INPUT_AREA_GUI_INITIALIZED: AtomicBool = AtomicBool::new(false);
-
 pub fn get_input_area(
-    no_gui: bool,
+    _no_gui: bool,
     output_sender: std::sync::mpsc::Sender<rylus_core::protocol::CustomInputAreas>,
 ) {
     // For the egui migration, the custom input area selection sends a default

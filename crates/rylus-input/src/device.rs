@@ -1,5 +1,5 @@
-use rylus_core::Capturable;
 use rylus_core::protocol::{KeyboardEvent, PointerEvent, WheelEvent};
+use rylus_core::Capturable;
 
 #[derive(PartialEq, Eq)]
 pub enum InputDeviceType {

@@ -159,10 +159,7 @@ bitflags! {
 
 fn button_from<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Button, D::Error> {
     let bits: u8 = Deserialize::deserialize(deserializer)?;
-    Button::from_bits(bits).map_or(
-        Err(serde::de::Error::custom("Failed to parse button code.")),
-        Ok,
-    )
+    Button::from_bits(bits).ok_or_else(|| serde::de::Error::custom("Failed to parse button code."))
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -231,7 +228,9 @@ mod tests {
 
     #[test]
     fn hello_roundtrip() {
-        let hello = Hello { protocol_version: PROTOCOL_VERSION };
+        let hello = Hello {
+            protocol_version: PROTOCOL_VERSION,
+        };
         let json = serde_json::to_string(&hello).unwrap();
         let back: Hello = serde_json::from_str(&json).unwrap();
         assert_eq!(back.protocol_version, PROTOCOL_VERSION);
@@ -241,7 +240,9 @@ mod tests {
 
     #[test]
     fn message_inbound_hello_roundtrip() {
-        let msg = MessageInbound::Hello(Hello { protocol_version: 1 });
+        let msg = MessageInbound::Hello(Hello {
+            protocol_version: 1,
+        });
         let json = serde_json::to_string(&msg).unwrap();
         let back: MessageInbound = serde_json::from_str(&json).unwrap();
         match back {
@@ -260,7 +261,11 @@ mod tests {
 
     #[test]
     fn message_inbound_pause_resume_restart_roundtrip() {
-        for msg in [MessageInbound::PauseVideo, MessageInbound::ResumeVideo, MessageInbound::RestartVideo] {
+        for msg in [
+            MessageInbound::PauseVideo,
+            MessageInbound::ResumeVideo,
+            MessageInbound::RestartVideo,
+        ] {
             let json = serde_json::to_string(&msg).unwrap();
             let _: MessageInbound = serde_json::from_str(&json).unwrap();
         }
@@ -268,7 +273,9 @@ mod tests {
 
     #[test]
     fn message_inbound_buffer_health_roundtrip() {
-        let msg = MessageInbound::BufferHealth(BufferHealth { buffer_seconds: 1.5 });
+        let msg = MessageInbound::BufferHealth(BufferHealth {
+            buffer_seconds: 1.5,
+        });
         let json = serde_json::to_string(&msg).unwrap();
         let back: MessageInbound = serde_json::from_str(&json).unwrap();
         match back {
@@ -283,7 +290,9 @@ mod tests {
 
     #[test]
     fn message_outbound_hello_roundtrip() {
-        let msg = MessageOutbound::Hello(Hello { protocol_version: 1 });
+        let msg = MessageOutbound::Hello(Hello {
+            protocol_version: 1,
+        });
         let json = serde_json::to_string(&msg).unwrap();
         let back: MessageOutbound = serde_json::from_str(&json).unwrap();
         match back {
@@ -356,7 +365,12 @@ mod tests {
 
     #[test]
     fn rect_roundtrip() {
-        let r = Rect { x: 0.1, y: 0.2, w: 0.5, h: 0.6 };
+        let r = Rect {
+            x: 0.1,
+            y: 0.2,
+            w: 0.5,
+            h: 0.6,
+        };
         let json = serde_json::to_string(&r).unwrap();
         let back: Rect = serde_json::from_str(&json).unwrap();
         assert_eq!(r, back);
@@ -375,7 +389,12 @@ mod tests {
     #[test]
     fn custom_input_areas_roundtrip_with_values() {
         let c = CustomInputAreas {
-            mouse: Some(Rect { x: 0.0, y: 0.0, w: 0.5, h: 0.5 }),
+            mouse: Some(Rect {
+                x: 0.0,
+                y: 0.0,
+                w: 0.5,
+                h: 0.5,
+            }),
             touch: None,
             pen: Some(Rect::default()),
         };
@@ -387,8 +406,18 @@ mod tests {
     #[test]
     fn message_outbound_custom_input_areas_roundtrip() {
         let msg = MessageOutbound::CustomInputAreas(CustomInputAreas {
-            mouse: Some(Rect { x: 0.1, y: 0.2, w: 0.3, h: 0.4 }),
-            touch: Some(Rect { x: 0.5, y: 0.6, w: 0.2, h: 0.1 }),
+            mouse: Some(Rect {
+                x: 0.1,
+                y: 0.2,
+                w: 0.3,
+                h: 0.4,
+            }),
+            touch: Some(Rect {
+                x: 0.5,
+                y: 0.6,
+                w: 0.2,
+                h: 0.1,
+            }),
             pen: None,
         });
         let json = serde_json::to_string(&msg).unwrap();
@@ -463,7 +492,11 @@ mod tests {
             );
             let ke: KeyboardEvent = serde_json::from_str(&json).unwrap();
             let loc_str = format!("{:?}", ke.location);
-            assert_eq!(loc_str, expected, "location {} should be {}", loc_num, expected);
+            assert_eq!(
+                loc_str, expected,
+                "location {} should be {}",
+                loc_num, expected
+            );
         }
     }
 
@@ -633,7 +666,11 @@ mod tests {
 
     #[test]
     fn wheel_event_roundtrip() {
-        let we = WheelEvent { dx: -3, dy: 120, timestamp: 5000 };
+        let we = WheelEvent {
+            dx: -3,
+            dy: 120,
+            timestamp: 5000,
+        };
         let json = serde_json::to_string(&we).unwrap();
         let back: WheelEvent = serde_json::from_str(&json).unwrap();
         assert_eq!(back.dx, -3);
@@ -700,7 +737,11 @@ mod tests {
 
     #[test]
     fn message_inbound_wheel_event_roundtrip() {
-        let msg = MessageInbound::WheelEvent(WheelEvent { dx: 0, dy: -1, timestamp: 0 });
+        let msg = MessageInbound::WheelEvent(WheelEvent {
+            dx: 0,
+            dy: -1,
+            timestamp: 0,
+        });
         let json = serde_json::to_string(&msg).unwrap();
         let back: MessageInbound = serde_json::from_str(&json).unwrap();
         match back {

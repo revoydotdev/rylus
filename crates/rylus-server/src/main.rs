@@ -10,9 +10,9 @@ use rylus_core::config::{get_config, Config};
 use rylus_core::Web2UiMessage;
 
 mod log;
+mod rylus;
 mod session;
 mod web;
-mod rylus;
 
 fn main() {
     let (sender, receiver) = std::sync::mpsc::sync_channel::<String>(100);
@@ -83,14 +83,15 @@ fn run_headless(conf: Config) {
     }
     #[cfg(unix)]
     {
-        let mut signals =
-            Signals::new(TERM_SIGNALS).expect("Failed to register signal handlers");
+        let mut signals = Signals::new(TERM_SIGNALS).expect("Failed to register signal handlers");
+        #[allow(clippy::never_loop)]
         for sig in signals.forever() {
             info!(
                 "Shutting down after receiving signal {signame} ({sig})...",
                 signame = signal_name(sig).unwrap_or("UNKNOWN SIGNAL")
             );
             std::thread::spawn(move || {
+                #[allow(clippy::never_loop)]
                 for sig in signals.forever() {
                     warn!(
                         "Received second signal {signame} ({sig}) while shutting down \

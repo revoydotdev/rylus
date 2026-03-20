@@ -67,9 +67,13 @@ impl Rylus {
                 config.custom_lib_js.clone(),
                 {
                     #[cfg(target_os = "linux")]
-                    { config.wayland_support }
+                    {
+                        config.wayland_support
+                    }
                     #[cfg(not(target_os = "linux"))]
-                    { false }
+                    {
+                        false
+                    }
                 },
             ),
             RylusClientConfig {

@@ -1,5 +1,5 @@
-use std::sync::mpsc::RecvTimeoutError;
 use std::sync::mpsc;
+use std::sync::mpsc::RecvTimeoutError;
 use std::thread::{spawn, JoinHandle};
 use std::time::{Duration, Instant};
 use tracing::{error, info, trace, warn};
@@ -7,8 +7,8 @@ use tracing::{error, info, trace, warn};
 use rylus_capture::{get_capturables, Capturable, Recorder};
 use rylus_core::error::CErrorCode;
 use rylus_core::protocol::{
-    ClientConfiguration, Hello, KeyboardEvent, MessageInbound, MessageOutbound,
-    PointerEvent, RylusReceiver, RylusSender, WheelEvent, PROTOCOL_VERSION,
+    ClientConfiguration, Hello, KeyboardEvent, MessageInbound, MessageOutbound, PointerEvent,
+    RylusReceiver, RylusSender, WheelEvent, PROTOCOL_VERSION,
 };
 use rylus_encode::{EncoderOptions, VideoEncoder};
 use rylus_input::device::{InputDevice, InputDeviceType};
@@ -101,7 +101,11 @@ impl<S, R, FnUInput> RylusClientHandler<S, R, FnUInput> {
         S: RylusSender + Clone + Send + Sync + 'static,
         FnUInput: Fn(),
     {
-        for message in self.receiver.take().expect("run() must only be called once") {
+        for message in self
+            .receiver
+            .take()
+            .expect("run() must only be called once")
+        {
             match message {
                 Ok(message) => {
                     trace!("Received message: {message:?}");
@@ -128,7 +132,10 @@ impl<S, R, FnUInput> RylusClientHandler<S, R, FnUInput> {
                             }
                         }
                         MessageInbound::BufferHealth(health) => {
-                            if let Err(e) = self.video_sender.send(VideoCommands::BufferHealth(health.buffer_seconds)) {
+                            if let Err(e) = self
+                                .video_sender
+                                .send(VideoCommands::BufferHealth(health.buffer_seconds))
+                            {
                                 warn!("Failed to send BufferHealth to video thread: {e}");
                             }
                         }
@@ -253,8 +260,8 @@ impl<S, R, FnUInput> RylusClientHandler<S, R, FnUInput> {
 
             #[cfg(target_os = "linux")]
             if config.uinput_support {
-                if self.input_device.as_ref().map_or(true, |d| {
-                    client_name_changed || d.device_type() != InputDeviceType::UInputDevice
+                if !self.input_device.as_ref().is_some_and(|d| {
+                    !client_name_changed && d.device_type() == InputDeviceType::UInputDevice
                 }) {
                     let device = rylus_input::uinput_device::UInputDevice::new(
                         capturable.clone(),
@@ -276,21 +283,23 @@ impl<S, R, FnUInput> RylusClientHandler<S, R, FnUInput> {
                 } else if let Some(d) = self.input_device.as_mut() {
                     d.set_capturable(capturable.clone());
                 }
-            } else if self.input_device.as_ref().map_or(true, |d| {
-                d.device_type() != InputDeviceType::EnigoDevice
-            }) {
-                self.input_device = Some(Box::new(
-                    rylus_input::enigo_device::EnigoDevice::new(capturable.clone()),
-                ));
+            } else if !self
+                .input_device
+                .as_ref()
+                .is_some_and(|d| d.device_type() == InputDeviceType::EnigoDevice)
+            {
+                self.input_device = Some(Box::new(rylus_input::enigo_device::EnigoDevice::new(
+                    capturable.clone(),
+                )));
             } else if let Some(d) = self.input_device.as_mut() {
                 d.set_capturable(capturable.clone());
             }
 
             #[cfg(target_os = "macos")]
             if self.input_device.is_none() {
-                self.input_device = Some(Box::new(
-                    rylus_input::enigo_device::EnigoDevice::new(capturable.clone()),
-                ));
+                self.input_device = Some(Box::new(rylus_input::enigo_device::EnigoDevice::new(
+                    capturable.clone(),
+                )));
             } else {
                 if let Some(d) = self.input_device.as_mut() {
                     d.set_capturable(capturable.clone());
@@ -323,10 +332,12 @@ impl<S, R, FnUInput> RylusClientHandler<S, R, FnUInput> {
             warn!(
                 "Got invalid id for capturable: {} (list has {} entries). \
                  On Wayland, click \"Refresh List\" after granting portal access.",
-                config.capturable_id, self.capturables.len()
+                config.capturable_id,
+                self.capturables.len()
             );
             self.send_message(MessageOutbound::ConfigError(
-                "No capturable selected. Click \"Refresh List\" to request screen access.".to_string(),
+                "No capturable selected. Click \"Refresh List\" to request screen access."
+                    .to_string(),
             ));
         }
     }
@@ -512,7 +523,9 @@ fn handle_video<S: RylusSender + Clone + Send + 'static>(
                 if new_qp != current_qp {
                     current_qp = new_qp;
                     let _ = encode_tx.try_send(EncodeCommand::SetQuality(current_qp));
-                    trace!("QP adjusted to {current_qp} based on buffer health ({buffer_secs:.1}s)");
+                    trace!(
+                        "QP adjusted to {current_qp} based on buffer health ({buffer_secs:.1}s)"
+                    );
                 }
             }
             Err(RecvTimeoutError::Timeout) => {
