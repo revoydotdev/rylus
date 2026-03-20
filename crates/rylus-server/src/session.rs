@@ -139,6 +139,7 @@ impl<S, R, FnUInput> RylusClientHandler<S, R, FnUInput> {
                                 warn!("Failed to send BufferHealth to video thread: {e}");
                             }
                         }
+                        MessageInbound::Heartbeat => {} // keepalive; receipt resets idle timer
                         MessageInbound::ChooseCustomInputAreas => {
                             #[cfg(feature = "gui")]
                             {

@@ -950,6 +950,8 @@ function handle_messages(
     let queue = [];
     let prevObjectURL: string = null;
     let health_frame_count = 0;
+    let last_onerror_restart = 0;
+    const ONERROR_DEBOUNCE_MS = 5000;
     const MAX_BUFFER_LENGTH = 20;  // In seconds
     function upd_buf() {
         if (sourceBuffer == null)
@@ -969,9 +971,13 @@ function handle_messages(
                 } catch (err) {
                     log(LogLevel.DEBUG, "Error appending to sourceBuffer:" + err);
                     // Drop everything, and try to pick up the stream again
-                    if (sourceBuffer.updating)
-                        sourceBuffer.abort();
-                    sourceBuffer.remove(0, Infinity);
+                    try {
+                        if (sourceBuffer.updating)
+                            sourceBuffer.abort();
+                        sourceBuffer.remove(0, Infinity);
+                    } catch (e) {
+                        // MediaSource may have closed; recovery will happen on NewVideo
+                    }
                 }
             }
         }
@@ -991,6 +997,7 @@ function handle_messages(
                     mediaSource = new MS();
                     sourceBuffer = null;
                     queue.length = 0;  // Clear stale frames from previous video
+                    health_frame_count = 0;
                     if (prevObjectURL) {
                         URL.revokeObjectURL(prevObjectURL);
                     }
@@ -1002,8 +1009,14 @@ function handle_messages(
                             mimeType = "video/mp4";
                         sourceBuffer = mediaSource.addSourceBuffer(mimeType);
                         sourceBuffer.addEventListener("updateend", upd_buf);
-                        // try to recover from errors by restarting the video
-                        sourceBuffer.onerror = () => settings.send_server_config();
+                        // try to recover from errors by restarting the video (debounced)
+                        sourceBuffer.onerror = () => {
+                            let now = performance.now();
+                            if (now - last_onerror_restart > ONERROR_DEBOUNCE_MS) {
+                                last_onerror_restart = now;
+                                settings.send_server_config();
+                            }
+                        };
                     })
                 } else if (msg == "ConfigOk") {
                     onConfigOk();
@@ -1034,10 +1047,18 @@ function handle_messages(
 
         // Report buffer health to server for adaptive quality
         health_frame_count++;
-        if (health_frame_count >= 30 && sourceBuffer && sourceBuffer.buffered.length > 0) {
+        if (health_frame_count >= 30) {
             health_frame_count = 0;
-            let buffer_seconds = sourceBuffer.buffered.end(0) - video.currentTime;
-            wsSend(JSON.stringify({"BufferHealth": {"buffer_seconds": buffer_seconds}}));
+            if (sourceBuffer && mediaSource && mediaSource.readyState === "open") {
+                try {
+                    if (sourceBuffer.buffered.length > 0) {
+                        let buffer_seconds = sourceBuffer.buffered.end(0) - video.currentTime;
+                        wsSend(JSON.stringify({"BufferHealth": {"buffer_seconds": buffer_seconds}}));
+                    }
+                } catch (e) {
+                    // sourceBuffer may be in an invalid state during teardown
+                }
+            }
         }
 
         // only seek if there is data available, some browsers choke otherwise
@@ -1133,6 +1154,18 @@ function init() {
     let reconnect_banner: HTMLDivElement | null = null
     let is_reconnecting = false
     let is_connected = false
+    let heartbeat_timer: number | null = null
+    const HEARTBEAT_INTERVAL = 30000  // 30s — well within 60s server idle timeout
+    function start_heartbeat() {
+        stop_heartbeat()
+        heartbeat_timer = window.setInterval(() => wsSend('"Heartbeat"'), HEARTBEAT_INTERVAL)
+    }
+    function stop_heartbeat() {
+        if (heartbeat_timer !== null) {
+            clearInterval(heartbeat_timer)
+            heartbeat_timer = null
+        }
+    }
 
     function remove_reconnect_banner() {
         if (reconnect_banner) {
@@ -1241,9 +1274,10 @@ function init() {
             reconnect_attempt = 0
             is_reconnecting = false
             remove_reconnect_banner()
+            start_heartbeat()
 
             // Re-send handshake and config
-            wsSend(JSON.stringify({"Hello": {"protocol_version": 1}}))
+            wsSend(JSON.stringify({"Hello": {"protocol_version": 2}}))
             wsSend('"GetCapturableList"')
             if (!settings.video_enabled())
                 wsSend('"PauseVideo"')
@@ -1272,6 +1306,7 @@ function init() {
     }
 
     let handle_disconnect = () => {
+        stop_heartbeat()
         if (is_reconnecting) return
         is_reconnecting = true
         reconnect_attempt = 0
@@ -1303,7 +1338,8 @@ function init() {
     );
     window.onunload = () => { webSocket.close(); }
     webSocket.onopen = function(event) {
-        wsSend(JSON.stringify({"Hello": {"protocol_version": 1}}));
+        start_heartbeat()
+        wsSend(JSON.stringify({"Hello": {"protocol_version": 2}}));
         wsSend('"GetCapturableList"');
         if (!settings.video_enabled())
             wsSend('"PauseVideo"');

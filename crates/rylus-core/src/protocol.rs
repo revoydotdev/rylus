@@ -4,7 +4,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 ///
 /// Increment when adding new message types or changing semantics.
 /// Clients and server negotiate on the minimum of their versions.
-pub const PROTOCOL_VERSION: u32 = 1;
+pub const PROTOCOL_VERSION: u32 = 2;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Hello {
@@ -42,6 +42,7 @@ pub enum MessageInbound {
     RestartVideo,
     ChooseCustomInputAreas,
     BufferHealth(BufferHealth),
+    Heartbeat,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -265,6 +266,7 @@ mod tests {
             MessageInbound::PauseVideo,
             MessageInbound::ResumeVideo,
             MessageInbound::RestartVideo,
+            MessageInbound::Heartbeat,
         ] {
             let json = serde_json::to_string(&msg).unwrap();
             let _: MessageInbound = serde_json::from_str(&json).unwrap();
