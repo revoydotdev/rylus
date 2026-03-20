@@ -10,7 +10,7 @@ use rylus_core::protocol::{
     Button, KeyboardEvent, PointerEvent, PointerEventType, PointerType, WheelEvent,
 };
 
-use rylus_capture::{Capturable, Geometry};
+use rylus_core::{Capturable, Geometry};
 
 pub struct WindowsInput {
     capturable: Box<dyn Capturable>,
@@ -22,6 +22,9 @@ pub struct WindowsInput {
 
 impl WindowsInput {
     pub fn new(capturable: Box<dyn Capturable>) -> Self {
+        // SAFETY: InitializeTouchInjection and CreateSyntheticPointerDevice are Windows API
+        // calls that initialize system input injection resources. The returned device handles
+        // are stored and destroyed in Drop.
         unsafe {
             InitializeTouchInjection(5, TOUCH_FEEDBACK_DEFAULT);
             Self {
@@ -37,6 +40,8 @@ impl WindowsInput {
 
 impl InputDevice for WindowsInput {
     fn send_wheel_event(&mut self, event: &WheelEvent) {
+        // SAFETY: mouse_event is a Windows API function that synthesizes mouse input;
+        // all parameters are plain integers with no pointer aliasing concerns.
         unsafe { mouse_event(MOUSEEVENTF_WHEEL, 0, 0, event.dy as DWORD, 0) };
     }
 
@@ -88,9 +93,10 @@ impl InputDevice for WindowsInput {
         }
         match event.pointer_type {
             PointerType::Pen => {
+                // SAFETY: POINTER_TYPE_INFO's union field is C-repr and all-zeros is a
+                // valid bit pattern for the union variants. InjectSyntheticPointerInput
+                // is called with a valid device handle and a properly initialized struct.
                 unsafe {
-                    // SAFETY: POINTER_TYPE_INFO's union field is C-repr and all-zeros is a
-                    // valid bit pattern for the union variants.
                     let mut pointer_type_info = POINTER_TYPE_INFO {
                         type_: PT_PEN,
                         u: std::mem::zeroed(),
@@ -128,16 +134,16 @@ impl InputDevice for WindowsInput {
                 }
             }
             PointerType::Touch => {
+                // SAFETY: POINTER_TYPE_INFO and POINTER_TOUCH_INFO are C-repr structs where
+                // all-zeros is a valid bit pattern. InjectSyntheticPointerInput is called
+                // with a valid device handle and properly initialized structs.
                 unsafe {
-                    // SAFETY: POINTER_TYPE_INFO's union field is C-repr and all-zeros is a
-                    // valid bit pattern for the union variants.
                     let mut pointer_type_info = POINTER_TYPE_INFO {
                         type_: PT_TOUCH,
                         u: std::mem::zeroed(),
                     };
 
-                    // SAFETY: POINTER_TOUCH_INFO and POINTER_INFO are C-repr structs where
-                    // all-zeros is a valid initial state; fields are overwritten below.
+
                     let mut pointer_touch_info: POINTER_TOUCH_INFO = std::mem::zeroed();
                     pointer_touch_info.pointerInfo = std::mem::zeroed();
                     pointer_touch_info.pointerInfo.pointerType = PT_TOUCH;
@@ -199,6 +205,8 @@ impl InputDevice for WindowsInput {
                         _ => {}
                     },
                     PointerEventType::MOVE | PointerEventType::OVER | PointerEventType::ENTER => {
+                        // SAFETY: SetCursorPos is a Windows API that moves the cursor;
+                        // screen_x/screen_y are valid screen coordinates.
                         unsafe { SetCursorPos(screen_x, screen_y) };
                     }
                     PointerEventType::UP => match event.button {
@@ -217,6 +225,8 @@ impl InputDevice for WindowsInput {
                         dw_flags |= MOUSEEVENTF_LEFTUP;
                     }
                 }
+                // SAFETY: mouse_event is a Windows API that synthesizes mouse input;
+                // all parameters are plain integers.
                 unsafe { mouse_event(dw_flags, 0 as u32, 0 as u32, 0, 0) };
             }
             PointerType::Unknown => {
@@ -241,6 +251,8 @@ impl InputDevice for WindowsInput {
 
 impl Drop for WindowsInput {
     fn drop(&mut self) {
+        // SAFETY: pointer_device_handle and touch_device_handle are valid handles obtained
+        // from CreateSyntheticPointerDevice in new() and are destroyed exactly once here.
         unsafe {
             DestroySyntheticPointerDevice(self.pointer_device_handle);
             DestroySyntheticPointerDevice(self.touch_device_handle);

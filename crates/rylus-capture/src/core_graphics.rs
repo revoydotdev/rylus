@@ -125,7 +125,7 @@ impl Recorder for RecorderCGDisplay {
                 w,
                 h,
                 img.bytes_per_row(),
-                self.img_data.as_ref().unwrap().bytes(),
+                self.img_data.as_ref().expect("img_data was just set above").bytes(),
             ))
         } else {
             Err(Box::new(CGError(
@@ -222,7 +222,7 @@ impl Recorder for RecorderCGWindow {
                 w,
                 h,
                 img.bytes_per_row(),
-                self.img_data.as_ref().unwrap().bytes(),
+                self.img_data.as_ref().expect("img_data was just set above").bytes(),
             ))
         } else {
             Err(Box::new(CGError(
@@ -247,16 +247,26 @@ fn get_window_infos() -> Vec<WindowInfo> {
     );
     if let Some(wins) = wins {
         for w in wins.iter() {
+            // SAFETY: The CoreGraphics window list returns CFDictionary entries with known
+            // keys (kCGWindowNumber, kCGWindowBounds, kCGWindowName) containing CFNumber,
+            // CFDictionary, and CFString values respectively. wrap_under_get_rule increments
+            // the reference count so the wrappers do not over-release. The kCG* constants
+            // are valid static CFString pointers provided by the CoreGraphics framework.
             let w: CFDictionary<*const c_void, *const c_void> =
                 unsafe { CFDictionary::wrap_under_get_rule(*w as CFDictionaryRef) };
             let id = w.get(unsafe { window::kCGWindowNumber }.to_void());
-            let id = unsafe { CFNumber::wrap_under_get_rule(*id as CFNumberRef) }
-                .to_i64()
-                .unwrap() as CGWindowID;
+            let id = match unsafe { CFNumber::wrap_under_get_rule(*id as CFNumberRef) }
+                .to_i64() {
+                Some(id) => id as CGWindowID,
+                None => continue,
+            };
 
             let bounds = w.get(unsafe { window::kCGWindowBounds }.to_void());
             let bounds = unsafe { CFDictionary::wrap_under_get_rule(*bounds as CFDictionaryRef) };
-            let bounds = CGRect::from_dict_representation(&bounds).unwrap();
+            let bounds = match CGRect::from_dict_representation(&bounds) {
+                Some(b) => b,
+                None => continue,
+            };
 
             let name = match w.find(unsafe { window::kCGWindowName }.to_void()) {
                 Some(n) => n,

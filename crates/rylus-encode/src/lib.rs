@@ -70,6 +70,8 @@ const EAGAIN: c_int = 35;
 const EAGAIN: c_int = 11;
 
 fn pix_fmt_name(fmt: AVPixelFormat) -> String {
+    // SAFETY: av_get_pix_fmt_name returns a static string pointer or null for unknown
+    // formats; we check for null before dereferencing.
     unsafe {
         let name = ffi::av_get_pix_fmt_name(fmt);
         if name.is_null() {
@@ -92,7 +94,11 @@ unsafe extern "C" fn avio_write_callback(
     if buf_size <= 0 {
         return buf_size;
     }
+    // SAFETY: `opaque` is set to a valid `*mut VideoEncoder` in `open_video` when
+    // creating the AVIO context, and the encoder outlives the format context.
     let encoder = unsafe { &mut *(opaque as *mut VideoEncoder) };
+    // SAFETY: FFmpeg guarantees `buf` points to `buf_size` valid bytes when buf_size > 0,
+    // which we checked above.
     let data = unsafe { std::slice::from_raw_parts(buf, buf_size as usize) };
     (encoder.write_data)(data);
     buf_size
@@ -173,6 +179,9 @@ impl ScaleContext {
         pix_fmt_sw_out: AVPixelFormat,
         frame_out: *mut ffi::AVFrame,
     ) -> Result<Self, EncodeError> {
+        // SAFETY: All FFmpeg allocator and filter-graph functions are called with valid
+        // pointers obtained from prior FFmpeg allocation calls. Null checks are performed
+        // after each allocation, and resources are freed on every error path.
         unsafe {
             // Allocate input frame
             let frame_in = ffi::av_frame_alloc();
@@ -213,7 +222,7 @@ impl ScaleContext {
                 1,
                 1
             );
-            let args_c = CString::new(args).unwrap();
+            let args_c = CString::new(args).expect("filter args should not contain null bytes");
             let mut buffersrc_ctx: *mut ffi::AVFilterContext = ptr::null_mut();
             let ret = ffi::avfilter_graph_create_filter(
                 &mut buffersrc_ctx,
@@ -286,7 +295,7 @@ impl ScaleContext {
             let filter_str = build_scale_filter_str(
                 pix_fmt_in, pix_fmt_out, pix_fmt_sw_out, width_out, height_out,
             );
-            let filter_c = CString::new(filter_str).unwrap();
+            let filter_c = CString::new(filter_str).expect("filter string should not contain null bytes");
             let ret = ffi::avfilter_graph_parse_ptr(
                 filter_graph,
                 filter_c.as_ptr(),
@@ -344,6 +353,8 @@ impl ScaleContext {
     }
 
     fn scale(&mut self) -> Result<(), EncodeError> {
+        // SAFETY: buffersrc_ctx, buffersink_ctx, frame_in, and frame_out are valid pointers
+        // allocated during ScaleContext::new and not freed until drop.
         unsafe {
             let ret = ffi::av_buffersrc_add_frame_flags(
                 self.buffersrc_ctx,
@@ -372,6 +383,8 @@ impl ScaleContext {
 
 impl Drop for ScaleContext {
     fn drop(&mut self) {
+        // SAFETY: filter_graph and frame_in are either null (checked) or valid pointers
+        // allocated by FFmpeg during ScaleContext::new. Each is freed exactly once.
         unsafe {
             if !self.filter_graph.is_null() {
                 ffi::avfilter_graph_free(&mut self.filter_graph);
@@ -406,6 +419,9 @@ impl Scalers {
         pix_fmt_sw_out: AVPixelFormat,
         hw_device_ctx: *mut ffi::AVBufferRef,
     ) -> Result<Self, EncodeError> {
+        // SAFETY: All FFmpeg allocation and hardware frame context functions are called with
+        // valid pointers. Null checks are performed after each allocation, and all resources
+        // are freed on error paths before returning.
         unsafe {
             let frame_out = ffi::av_frame_alloc();
             if frame_out.is_null() {
@@ -483,6 +499,8 @@ impl Drop for Scalers {
         self.bgr0.take();
         self.rgb0.take();
         self.rgb.take();
+        // SAFETY: ScaleContexts are dropped first (above) so frame_out is no longer
+        // referenced. Both pointers are either null (checked) or valid FFmpeg allocations.
         unsafe {
             if !self.frame_out.is_null() {
                 ffi::av_frame_free(&mut self.frame_out);
@@ -556,6 +574,9 @@ impl VideoEncoder {
     }
 
     fn open_video(&mut self, options: EncoderOptions) -> Result<(), EncodeError> {
+        // SAFETY: FFmpeg format/codec allocation and AVIO setup. All pointers are checked
+        // for null after allocation. The AVIO opaque pointer is `self`, which is valid for
+        // the lifetime of the format context because VideoEncoder owns both.
         unsafe {
             let ret = ffi::avformat_alloc_output_context2(
                 &mut self.format_ctx,
@@ -654,6 +675,8 @@ impl VideoEncoder {
     }
 
     fn set_codec_params(&self, c: *mut ffi::AVCodecContext) {
+        // SAFETY: `c` is a freshly allocated codec context from avcodec_alloc_context3 and
+        // format_ctx was allocated in open_video; both are valid, non-null pointers.
         unsafe {
             (*c).width = self.width_out as c_int;
             (*c).height = self.height_out as c_int;
@@ -671,11 +694,14 @@ impl VideoEncoder {
 
     #[cfg(target_os = "linux")]
     fn try_vaapi(&mut self) -> bool {
+        // SAFETY: FFmpeg hardware device and codec allocation. All pointers are null-checked
+        // after allocation and freed on error paths. hw_device_ctx is stored in self only on
+        // success.
         unsafe {
             let vaapi_device = std::env::var("RYLUS_VAAPI_DEVICE").ok();
             let vaapi_device_c = vaapi_device
                 .as_ref()
-                .map(|d| CString::new(d.as_str()).unwrap());
+                .and_then(|d| CString::new(d.as_str()).ok());
             let device_ptr = vaapi_device_c
                 .as_ref()
                 .map_or(ptr::null(), |c| c.as_ptr());
@@ -741,6 +767,8 @@ impl VideoEncoder {
 
     #[cfg(target_os = "windows")]
     fn try_mediafoundation(&mut self) -> bool {
+        // SAFETY: FFmpeg codec allocation for MediaFoundation encoder. All pointers are
+        // null-checked after allocation and freed on error paths.
         unsafe {
             let codec = ffi::avcodec_find_encoder_by_name(c"h264_mf".as_ptr());
             if codec.is_null() {
@@ -796,6 +824,8 @@ impl VideoEncoder {
 
     #[cfg(any(target_os = "linux", target_os = "windows"))]
     fn try_nvenc(&mut self) -> bool {
+        // SAFETY: FFmpeg CUDA hardware device and NVENC codec allocation. All pointers are
+        // null-checked after allocation and freed on error paths.
         unsafe {
             let ret = ffi::av_hwdevice_ctx_create(
                 &mut self.hw_device_ctx,
@@ -866,6 +896,8 @@ impl VideoEncoder {
 
     #[cfg(target_os = "macos")]
     fn try_videotoolbox(&mut self) -> bool {
+        // SAFETY: FFmpeg codec allocation for VideoToolbox encoder. All pointers are
+        // null-checked after allocation and freed on error paths.
         unsafe {
             let codec = ffi::avcodec_find_encoder_by_name(c"h264_videotoolbox".as_ptr());
             if codec.is_null() {
@@ -921,6 +953,8 @@ impl VideoEncoder {
     }
 
     fn setup_libx264(&mut self) -> Result<(), EncodeError> {
+        // SAFETY: FFmpeg codec allocation for libx264 software encoder. All pointers are
+        // null-checked after allocation and freed on error paths.
         unsafe {
             let codec = ffi::avcodec_find_encoder_by_name(c"libx264".as_ptr());
             if codec.is_null() {
@@ -983,7 +1017,9 @@ impl VideoEncoder {
 
         let scaler = match pixel_provider {
             PixelProvider::BGR0(w, _, bgr0) => {
-                let s = scalers.bgr0.as_mut().unwrap();
+                let s = scalers.bgr0.as_mut().expect("BGR0 scaler not initialized");
+                // SAFETY: frame_in is a valid AVFrame allocated in ScaleContext::new.
+                // The pixel data pointer is valid for the duration of this encode call.
                 unsafe {
                     (*s.frame_in).data[0] = bgr0.as_ptr() as *mut u8;
                     (*s.frame_in).linesize[0] = (w * 4) as c_int;
@@ -991,7 +1027,9 @@ impl VideoEncoder {
                 s
             }
             PixelProvider::BGR0S(_, _, stride, bgr0) => {
-                let s = scalers.bgr0.as_mut().unwrap();
+                let s = scalers.bgr0.as_mut().expect("BGR0 scaler not initialized");
+                // SAFETY: frame_in is a valid AVFrame allocated in ScaleContext::new.
+                // The pixel data pointer is valid for the duration of this encode call.
                 unsafe {
                     (*s.frame_in).data[0] = bgr0.as_ptr() as *mut u8;
                     (*s.frame_in).linesize[0] = stride as c_int;
@@ -999,7 +1037,9 @@ impl VideoEncoder {
                 s
             }
             PixelProvider::RGB(w, _, rgb) => {
-                let s = scalers.rgb.as_mut().unwrap();
+                let s = scalers.rgb.as_mut().expect("RGB scaler not initialized");
+                // SAFETY: frame_in is a valid AVFrame allocated in ScaleContext::new.
+                // The pixel data pointer is valid for the duration of this encode call.
                 unsafe {
                     (*s.frame_in).data[0] = rgb.as_ptr() as *mut u8;
                     (*s.frame_in).linesize[0] = (w * 3) as c_int;
@@ -1007,7 +1047,9 @@ impl VideoEncoder {
                 s
             }
             PixelProvider::RGB0(w, _, rgb0) => {
-                let s = scalers.rgb0.as_mut().unwrap();
+                let s = scalers.rgb0.as_mut().expect("RGB0 scaler not initialized");
+                // SAFETY: frame_in is a valid AVFrame allocated in ScaleContext::new.
+                // The pixel data pointer is valid for the duration of this encode call.
                 unsafe {
                     (*s.frame_in).data[0] = rgb0.as_ptr() as *mut u8;
                     (*s.frame_in).linesize[0] = (w * 4) as c_int;
@@ -1028,6 +1070,9 @@ impl VideoEncoder {
     }
 
     fn encode_frame(&mut self) -> Result<(), EncodeError> {
+        // SAFETY: codec_ctx, format_ctx, frame, and packet are valid pointers initialized
+        // in open_video. frame is null-checked at entry. The encoding loop follows FFmpeg's
+        // documented send_frame/receive_packet pattern.
         unsafe {
             if self.frame.is_null() {
                 return Err(enc_err!("Frame not initialized"));
@@ -1082,11 +1127,13 @@ impl VideoEncoder {
     /// The default is 23. Increasing QP reduces quality but speeds up encoding.
     pub fn set_quality(&mut self, qp: u32) {
         let qp = qp.min(51);
+        // SAFETY: codec_ctx is checked for null before dereferencing. When non-null, it is
+        // a valid codec context allocated in open_video.
         unsafe {
             if self.codec_ctx.is_null() {
                 return;
             }
-            let qp_str = CString::new(qp.to_string()).unwrap();
+            let qp_str = CString::new(qp.to_string()).expect("numeric string should not contain null bytes");
             // Try setting QP via priv_data options (works for most encoders)
             ffi::av_opt_set(
                 (*self.codec_ctx).priv_data,
@@ -1103,6 +1150,9 @@ impl VideoEncoder {
 
 impl Drop for VideoEncoder {
     fn drop(&mut self) {
+        // SAFETY: Each pointer is null-checked before freeing. All are valid FFmpeg
+        // allocations made during open_video/new. Each is freed exactly once. The AVIO
+        // context is freed before the format context that references it.
         unsafe {
             if !self.format_ctx.is_null() {
                 ffi::av_write_trailer(self.format_ctx);
@@ -1129,6 +1179,7 @@ impl Drop for VideoEncoder {
 // ============================================================
 
 pub fn init_ffmpeg_logger() {
+    // SAFETY: av_log_set_level is safe to call at any time; it only sets a global integer.
     unsafe {
         ffi::av_log_set_level(ffi::AV_LOG_WARNING);
     }

@@ -175,7 +175,7 @@ pub fn run(config: &Config, log_receiver: mpsc::Receiver<String>, mut rylus: Box
         output_server_addr.y() + output_server_addr.height() + padding,
     );
     output.set_buffer(output_buf);
-    let output_buf = output.buffer().unwrap();
+    let output_buf = output.buffer().expect("text display buffer was just set");
 
     let mut choice_theme = Choice::default()
         .with_size(width, height)
@@ -200,7 +200,7 @@ pub fn run(config: &Config, log_receiver: mpsc::Receiver<String>, mut rylus: Box
 
     std::thread::spawn(move || {
         while let Ok(log_message) = log_receiver.recv() {
-            let mut output_buf = output_buf.lock().unwrap();
+            let mut output_buf = output_buf.lock().expect("output buffer mutex poisoned");
             output_buf.append(&log_message);
         }
     });
@@ -215,15 +215,15 @@ pub fn run(config: &Config, log_receiver: mpsc::Receiver<String>, mut rylus: Box
             let v = c.value();
             if v >= 0 {
                 ThemeType::from_index(v).apply();
-                config.lock().unwrap().gui_theme = Some(ThemeType::from_index(v));
-                write_config(&config.lock().unwrap());
+                config.lock().expect("config mutex poisoned").gui_theme = Some(ThemeType::from_index(v));
+                write_config(&config.lock().expect("config mutex poisoned"));
             }
         });
     }
 
     let mut toggle_server = move |but: &mut Button| {
         if let Err(err) = || -> Result<(), Box<dyn std::error::Error>> {
-            let mut config = config.lock().unwrap();
+            let mut config = config.lock().expect("config mutex poisoned");
             if !is_server_running {
                 {
                     let access_code_string = input_access_code.value();
@@ -283,7 +283,7 @@ pub fn run(config: &Config, log_receiver: mpsc::Receiver<String>, mut rylus: Box
                         let mut pop_up_text = TextDisplay::default().with_size(w, h);
                         pop_up_text.set_buffer(buf);
                         pop_up_text.wrap_mode(fltk::text::WrapMode::AtBounds, 5);
-                        let mut buf = pop_up_text.buffer().unwrap();
+                        let mut buf = pop_up_text.buffer().expect("text display buffer was just set");
                         buf.set_text(std::include_str!("strings/uinput_error.txt"));
 
                         pop_up.end();
@@ -350,7 +350,13 @@ pub fn run(config: &Config, log_receiver: mpsc::Receiver<String>, mut rylus: Box
                     }
 
                     let cb = move |qr_frame: &mut Frame, _, _, w, h| {
-                        let code = QrCode::new(&url_string).unwrap();
+                        let code = match QrCode::new(&url_string) {
+                            Ok(c) => c,
+                            Err(e) => {
+                                warn!("Failed to generate QR code: {}", e);
+                                return;
+                            }
+                        };
                         let img_buf = code.render::<Luma<u8>>().build();
                         let image = image::DynamicImage::ImageLuma8(img_buf);
                         let dims = min(w, h) as u32;
@@ -358,10 +364,17 @@ pub fn run(config: &Config, log_receiver: mpsc::Receiver<String>, mut rylus: Box
                             image.resize_exact(dims, dims, image::imageops::FilterType::Nearest);
                         let mut buf = vec![];
                         let mut cursor = Cursor::new(&mut buf);
-                        image
-                            .write_to(&mut cursor, image::ImageFormat::Png)
-                            .unwrap();
-                        let png = PngImage::from_data(&buf).unwrap();
+                        if let Err(e) = image.write_to(&mut cursor, image::ImageFormat::Png) {
+                            warn!("Failed to encode QR code as PNG: {}", e);
+                            return;
+                        }
+                        let png = match PngImage::from_data(&buf) {
+                            Ok(p) => p,
+                            Err(e) => {
+                                warn!("Failed to load QR code PNG: {}", e);
+                                return;
+                            }
+                        };
                         qr_frame.set_image(Some(png));
                     };
 
@@ -436,7 +449,7 @@ pub fn get_input_area(
                 let mut winctx = create_custom_input_area_window();
                 custom_input_area_window_handle_events(&mut winctx.win, output_sender.clone());
                 show_overlay_window(&mut winctx);
-                WINCTX.lock().unwrap().replace(winctx);
+                WINCTX.lock().expect("WINCTX mutex poisoned").replace(winctx);
                 loop {
                     // calling wait_for ensures that the fltk event loop keeps running even if
                     // there is no window shown
@@ -447,20 +460,20 @@ pub fn get_input_area(
             });
         } else {
             fltk::app::awake_callback(move || {
-                let mut winctx = WINCTX.lock().unwrap();
-                let winctx = winctx.as_mut().unwrap();
+                let mut winctx = WINCTX.lock().expect("WINCTX mutex poisoned");
+                let winctx = winctx.as_mut().expect("WINCTX should be initialized on first call");
                 custom_input_area_window_handle_events(&mut winctx.win, output_sender.clone());
                 show_overlay_window(winctx);
             });
         }
     } else {
         fltk::app::awake_callback(move || {
-            let mut winctx = WINCTX.lock().unwrap();
+            let mut winctx = WINCTX.lock().expect("WINCTX mutex poisoned");
             if winctx.is_none() {
                 winctx.replace(create_custom_input_area_window());
             }
 
-            let winctx = winctx.as_mut().unwrap();
+            let winctx = winctx.as_mut().expect("WINCTX should be initialized above");
             custom_input_area_window_handle_events(&mut winctx.win, output_sender.clone());
             show_overlay_window(winctx);
         });
@@ -709,13 +722,13 @@ fn custom_input_area_window_handle_events(
                     win.set_cursor(fltk::enums::Cursor::Default);
                     win.hide();
                     let mut areas = CustomInputAreas::default();
-                    let workspaces = WINCTX.lock().unwrap().as_ref().unwrap().workspaces.clone();
+                    let workspaces = WINCTX.lock().expect("WINCTX mutex poisoned").as_ref().expect("WINCTX should be initialized").workspaces.clone();
                     for (name, area) in [
                         ("choice_mouse", &mut areas.mouse),
                         ("choice_touch", &mut areas.touch),
                         ("choice_pen", &mut areas.pen),
                     ] {
-                        let c: Choice = fltk::app::widget_from_id(name).unwrap();
+                        let c: Choice = fltk::app::widget_from_id(name).expect("choice widget should exist with this id");
                         match c.value() {
                             0 => (),
                             v @ 1.. if (v as usize) <= workspaces.len() => {
@@ -725,7 +738,9 @@ fn custom_input_area_window_handle_events(
                             v => warn!("Unexpected value in {name}: {v}!"),
                         }
                     }
-                    sender.send(areas).unwrap();
+                    if let Err(e) = sender.send(areas) {
+                        warn!("Failed to send custom input areas: {}", e);
+                    }
                     true
                 }
                 fltk::enums::Key::Escape => {
@@ -785,7 +800,7 @@ fn show_overlay_window(winctx: &mut InputAreaWindowContext) {
     if win.fullscreen_active() {
         win.set_size(600, 600);
         let n = win.screen_num();
-        let screen = app::Screen::new(n).unwrap();
+        let screen = app::Screen::new(n).expect("screen number from current window should be valid");
         win.set_pos(
             screen.x() + (screen.w() - 600) / 2,
             screen.y() + (screen.h() - 600) / 2,

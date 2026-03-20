@@ -27,6 +27,9 @@ extern "C" {
 }
 
 pub fn x11_init() {
+    // SAFETY: XInitThreads must be called before any other Xlib call to enable thread
+    // safety; we call it at startup. x11_set_error_handler installs a custom handler that
+    // is valid for the process lifetime.
     unsafe {
         XInitThreads();
         x11_set_error_handler();
@@ -41,6 +44,8 @@ pub struct X11Capturable {
 
 impl Clone for X11Capturable {
     fn clone(&self) -> Self {
+        // SAFETY: self.handle is a valid capturable pointer obtained from create_capturables
+        // or a prior clone_capturable call. clone_capturable returns a new valid handle.
         let handle = unsafe { clone_capturable(self.handle) };
         Self {
             handle,
@@ -49,6 +54,9 @@ impl Clone for X11Capturable {
     }
 }
 
+// SAFETY: The raw handle pointer is only used while the X display lock is held
+// (via DisplayGuard), and the Arc<XDisplay> ensures the display outlives the capturable.
+// All X11 operations on the handle are serialized through XLockDisplay/XUnlockDisplay.
 unsafe impl Send for X11Capturable {}
 
 impl X11Capturable {
@@ -59,6 +67,8 @@ impl X11Capturable {
 
 impl Capturable for X11Capturable {
     fn name(&self) -> String {
+        // SAFETY: self.handle is a valid capturable pointer. get_capturable_name returns a
+        // C string pointer that is valid for the lifetime of the handle.
         unsafe {
             CStr::from_ptr(get_capturable_name(self.handle))
                 .to_string_lossy()
@@ -74,6 +84,8 @@ impl Capturable for X11Capturable {
         let mut err = CError::new();
         {
             let _guard = DisplayGuard::new(&self.disp);
+            // SAFETY: self.handle is valid, the display lock is held via DisplayGuard,
+            // and all output pointers are valid stack-allocated variables.
             unsafe {
                 get_geometry_relative(
                     self.handle,
@@ -100,6 +112,7 @@ impl Capturable for X11Capturable {
         let mut err = CError::new();
         {
             let _guard = DisplayGuard::new(&self.disp);
+            // SAFETY: self.handle is valid and the display lock is held via DisplayGuard.
             unsafe { capturable_before_input(self.handle, &mut err) };
         }
         if err.is_err() {
@@ -125,6 +138,8 @@ impl fmt::Display for X11Capturable {
 
 impl Drop for X11Capturable {
     fn drop(&mut self) {
+        // SAFETY: self.handle was obtained from create_capturables or clone_capturable and
+        // is freed exactly once here.
         unsafe {
             destroy_capturable(self.handle);
         }
@@ -137,6 +152,8 @@ struct XDisplay {
 
 impl XDisplay {
     pub fn new() -> Option<Self> {
+        // SAFETY: XOpenDisplay with null opens the default display; returns null on failure
+        // which we check immediately.
         let handle = unsafe { XOpenDisplay(std::ptr::null()) };
         if handle.is_null() {
             return None;
@@ -145,16 +162,19 @@ impl XDisplay {
     }
 
     pub fn lock(&self) {
+        // SAFETY: self.handle is a valid display pointer from XOpenDisplay.
         unsafe { XLockDisplay(self.handle) }
     }
 
     pub fn unlock(&self) {
+        // SAFETY: self.handle is a valid display pointer and the caller holds the lock.
         unsafe { XUnlockDisplay(self.handle) }
     }
 }
 
 impl Drop for XDisplay {
     fn drop(&mut self) {
+        // SAFETY: self.handle is a valid display pointer and is closed exactly once here.
         unsafe { XCloseDisplay(self.handle) };
     }
 }
@@ -194,6 +214,8 @@ impl X11Context {
         let mut num_monitors: c_int = 0;
         let size = {
             let _guard = DisplayGuard::new(&self.disp);
+            // SAFETY: disp.handle is valid, the display lock is held, and the handles buffer
+            // is large enough (128 entries). create_capturables respects the size parameter.
             unsafe {
                 create_capturables(
                     self.disp.handle,
@@ -227,9 +249,11 @@ impl X11Context {
 
     pub fn map_input_device_to_entire_screen(&mut self, device_name: &str, pen: bool) -> CError {
         let mut err = CError::new();
-        let device_name_c_str = CString::new(device_name.replace('\0', "")).unwrap();
+        let device_name_c_str = CString::new(device_name.replace('\0', "")).expect("null bytes were stripped above");
         {
             let _guard = DisplayGuard::new(&self.disp);
+            // SAFETY: disp.handle is valid, the display lock is held, and the C string
+            // and error pointer are valid for the duration of this call.
             unsafe {
                 map_input_device_to_entire_screen(
                     self.disp.handle,
@@ -267,6 +291,9 @@ impl CImage {
     }
 
     pub fn data(&self) -> &[u8] {
+        // SAFETY: self.data was set by capture_screen to point to pixel data of
+        // width*height*4 bytes, which matches self.size(). The data is valid until the
+        // next capture_screen call.
         unsafe { from_raw_parts(self.data, self.size()) }
     }
 }
@@ -285,6 +312,8 @@ impl RecorderX11 {
         let mut err = CError::new();
         let handle = {
             capturable.disp.lock();
+            // SAFETY: capturable.handle() returns a valid capturable pointer and the display
+            // lock is held. start_capture returns a capture handle or sets err on failure.
             let h = unsafe { start_capture(capturable.handle(), std::ptr::null_mut(), &mut err) };
             capturable.disp.unlock();
             h
@@ -307,6 +336,8 @@ impl Drop for RecorderX11 {
         let mut err = CError::new();
         {
             let _guard = DisplayGuard::new(&self.capturable.disp);
+            // SAFETY: self.handle is a valid capture handle from start_capture, the display
+            // lock is held, and the handle is stopped exactly once here in drop.
             unsafe {
                 stop_capture(self.handle, &mut err);
             }
@@ -319,6 +350,8 @@ impl Recorder for RecorderX11 {
         let mut err = CError::new();
         {
             let _guard = DisplayGuard::new(&self.capturable.disp);
+            // SAFETY: self.handle is a valid capture handle, the display lock is held,
+            // and self.img is a valid CImage that capture_screen will populate.
             unsafe {
                 capture_screen(
                     self.handle,

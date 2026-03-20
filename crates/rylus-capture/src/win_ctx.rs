@@ -16,6 +16,8 @@ fn hr_failed(hr: HRESULT) -> bool {
 }
 
 fn create_dxgi_factory_1() -> Result<ComPtr<IDXGIFactory1>, String> {
+    // SAFETY: CreateDXGIFactory1 is called with the correct IID and a valid output pointer.
+    // The HRESULT is checked before wrapping the raw pointer in a ComPtr.
     unsafe {
         let mut factory = ptr::null_mut();
         let hr = CreateDXGIFactory1(&IID_IDXGIFactory1, &mut factory);
@@ -30,6 +32,9 @@ fn create_dxgi_factory_1() -> Result<ComPtr<IDXGIFactory1>, String> {
 fn get_adapter_outputs(adapter: &IDXGIAdapter1) -> Vec<ComPtr<IDXGIOutput>> {
     let mut outputs = Vec::new();
     for i in 0.. {
+        // SAFETY: adapter is a valid IDXGIAdapter1 from EnumAdapters1. EnumOutputs returns
+        // DXGI_ERROR_NOT_FOUND when the index exceeds available outputs, which we use to
+        // break. GetDesc populates a valid DXGI_OUTPUT_DESC for attached outputs.
         unsafe {
             let mut output = ptr::null_mut();
             if hr_failed(adapter.EnumOutputs(i, &mut output)) {
@@ -58,6 +63,9 @@ impl WinCtx {
     pub fn new() -> WinCtx {
         let mut desktops: Vec<DXGI_OUTPUT_DESC> = Vec::new();
         let mut union: RECT;
+        // SAFETY: RECT and DXGI_OUTPUT_DESC are C-repr structs where zeroed memory is valid.
+        // The factory and adapter are obtained from DXGI APIs with HRESULT checks. UnionRect
+        // receives valid pointers to stack-allocated RECTs.
         unsafe {
             union = mem::zeroed();
             let factory = match create_dxgi_factory_1() {

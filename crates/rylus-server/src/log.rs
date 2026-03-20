@@ -77,6 +77,7 @@ mod x11_log_callbacks {
     #[no_mangle]
     extern "C" fn log_error_rust(msg: *const c_char) {
         if msg.is_null() { return; }
+        // SAFETY: msg is non-null (checked above) and NUL-terminated by the C caller (vsnprintf).
         let msg = unsafe { CStr::from_ptr(msg) }.to_string_lossy();
         error!("{}", msg);
     }
@@ -84,6 +85,7 @@ mod x11_log_callbacks {
     #[no_mangle]
     extern "C" fn log_debug_rust(msg: *const c_char) {
         if msg.is_null() { return; }
+        // SAFETY: msg is non-null (checked above) and NUL-terminated by the C caller (vsnprintf).
         let msg = unsafe { CStr::from_ptr(msg) }.to_string_lossy();
         debug!("{}", msg);
     }
@@ -91,6 +93,7 @@ mod x11_log_callbacks {
     #[no_mangle]
     extern "C" fn log_info_rust(msg: *const c_char) {
         if msg.is_null() { return; }
+        // SAFETY: msg is non-null (checked above) and NUL-terminated by the C caller (vsnprintf).
         let msg = unsafe { CStr::from_ptr(msg) }.to_string_lossy();
         info!("{}", msg);
     }
@@ -98,6 +101,7 @@ mod x11_log_callbacks {
     #[no_mangle]
     extern "C" fn log_trace_rust(msg: *const c_char) {
         if msg.is_null() { return; }
+        // SAFETY: msg is non-null (checked above) and NUL-terminated by the C caller (vsnprintf).
         let msg = unsafe { CStr::from_ptr(msg) }.to_string_lossy();
         trace!("{}", msg);
     }
@@ -105,6 +109,7 @@ mod x11_log_callbacks {
     #[no_mangle]
     extern "C" fn log_warn_rust(msg: *const c_char) {
         if msg.is_null() { return; }
+        // SAFETY: msg is non-null (checked above) and NUL-terminated by the C caller (vsnprintf).
         let msg = unsafe { CStr::from_ptr(msg) }.to_string_lossy();
         warn!("{}", msg);
     }
