@@ -28,6 +28,18 @@
 
 ## Performance
 
+### Investigate H.264 profile/level mismatch between encoder and MSE codec string
+
+**What:** The MSE codec string `avc1.4D403D` declares Main Profile Level 6.1, but nvenc may produce High Profile by default. A mismatch causes silent MSE decode errors and wasted `onerror` restarts (now debounced but still wasteful).
+
+**Why:** If the encoder outputs High Profile (0x64) but the browser expects Main Profile (0x4D), frames decode intermittently or fail entirely depending on browser strictness. This may be the root cause of the "one or two flashes then black" symptom.
+
+**Context:** Codec string is hardcoded in `ts/lib.ts` line ~1000. nvenc codec setup is in `crates/rylus-encode/src/lib.rs` `try_nvenc()` — no explicit `profile` is set. Fix either by setting `-profile:v main` on the encoder, or by reading the actual profile/level from the fMP4 init segment and generating the codec string dynamically (e.g., `avc1.640033` for High Profile Level 5.1).
+
+**Effort:** M
+**Priority:** P1
+**Depends on:** None
+
 ### Investigate PipeWire zero-copy via DMA-BUF
 
 **What:** Eliminate frame memcpy in PipeWire capture→encode path using FFmpeg DMA-BUF/hwframe import.

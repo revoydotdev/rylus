@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.15.1] - 2026-03-20
+
+### Fixed
+
+- **FFmpeg 8+ compatibility:** Migrated buffersink pixel format from deprecated
+  `pix_fmts` binary option to new `pixel_formats` string API, with automatic
+  fallback for FFmpeg < 7.1
+- **WebSocket idle disconnect loop:** Added client heartbeat (30s interval) to
+  keep connections alive during PipeWire capture timeouts. New `Heartbeat`
+  protocol message; bumped protocol version to 2
+- **MSE InvalidStateError cascade:** Guarded `sourceBuffer.buffered` access with
+  `readyState === "open"` check and try-catch. Added inner try-catch in upd_buf
+  error recovery. Debounced `sourceBuffer.onerror` restart (5s) to prevent
+  tight NewVideo loop on persistent decode errors
+
+### Changed
+
+- **Build pipeline:** Replaced `tsc` with `esbuild` in build.rs. Added
+  `rerun-if-changed` for both TypeScript source and generated JS to ensure
+  `cargo build` picks up client changes
+- **Default features:** GUI feature enabled by default for local development
+
 ## [0.15.0] - 2026-03-19
 
 ### Changed
