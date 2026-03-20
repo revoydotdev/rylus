@@ -21,7 +21,12 @@ fn main() {
 
     if js_needs_update {
         let status = Command::new("npx")
-            .args(["esbuild", "ts/lib.ts", "--target=es2020", "--outfile=www/static/lib.js"])
+            .args([
+                "esbuild",
+                "ts/lib.ts",
+                "--target=es2020",
+                "--outfile=www/static/lib.js",
+            ])
             .current_dir(workspace_root)
             .status();
 
