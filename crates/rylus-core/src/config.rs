@@ -5,9 +5,6 @@ use clap::Parser;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, warn};
 
-#[cfg(feature = "gui")]
-use fltk_theme;
-
 #[derive(clap::ValueEnum, Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ThemeType {
     Aero,
@@ -38,22 +35,6 @@ impl Default for ThemeType {
 }
 
 impl ThemeType {
-    #[cfg(feature = "gui")]
-    pub fn apply(&self) {
-        let theme = match self {
-            ThemeType::Classic => fltk_theme::ThemeType::Classic,
-            ThemeType::Aero => fltk_theme::ThemeType::Aero,
-            ThemeType::Metro => fltk_theme::ThemeType::Metro,
-            ThemeType::AquaClassic => fltk_theme::ThemeType::AquaClassic,
-            ThemeType::Greybird => fltk_theme::ThemeType::Greybird,
-            ThemeType::Blue => fltk_theme::ThemeType::Blue,
-            ThemeType::Dark => fltk_theme::ThemeType::Dark,
-            ThemeType::HighContrast => fltk_theme::ThemeType::HighContrast,
-        };
-        let theme = fltk_theme::WidgetTheme::new(theme);
-        theme.apply();
-    }
-
     pub fn name(&self) -> String {
         format!("{self:?}")
     }

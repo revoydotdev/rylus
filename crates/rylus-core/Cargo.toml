@@ -8,7 +8,7 @@ description = "Core types and protocol definitions for Rylus"
 
 [features]
 default = []
-gui = ["dep:fltk", "dep:fltk-theme"]
+gui = []
 
 [dependencies]
 bitflags = { workspace = true }
@@ -19,7 +19,3 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 toml = "^0.9"
 tracing = { workspace = true }
-
-# GUI-optional dependencies
-fltk = { version = "^1.5", features = ["use-wayland"], optional = true }
-fltk-theme = { version = "^0.7.9", optional = true }
