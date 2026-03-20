@@ -774,3 +774,210 @@ async fn run_server(
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ---- hash_access_code / verify_access_code ----
+
+    #[test]
+    fn hash_and_verify_correct_code() {
+        let code = "my_secret_code";
+        let hash = hash_access_code(code);
+        assert!(verify_access_code(code, &hash));
+    }
+
+    #[test]
+    fn verify_wrong_code_fails() {
+        let hash = hash_access_code("correct");
+        assert!(!verify_access_code("wrong", &hash));
+    }
+
+    #[test]
+    fn verify_empty_code() {
+        let hash = hash_access_code("");
+        assert!(verify_access_code("", &hash));
+        assert!(!verify_access_code("notempty", &hash));
+    }
+
+    #[test]
+    fn hash_produces_unique_salts() {
+        let h1 = hash_access_code("same");
+        let h2 = hash_access_code("same");
+        // Same password, different salts -> different hashes
+        assert_ne!(h1, h2);
+        // But both verify
+        assert!(verify_access_code("same", &h1));
+        assert!(verify_access_code("same", &h2));
+    }
+
+    #[test]
+    fn verify_invalid_hash_returns_false() {
+        assert!(!verify_access_code("anything", "not_a_valid_hash"));
+    }
+
+    #[test]
+    fn verify_with_unicode_code() {
+        let code = "\u{1F680}rocket\u{2603}";
+        let hash = hash_access_code(code);
+        assert!(verify_access_code(code, &hash));
+        assert!(!verify_access_code("rocket", &hash));
+    }
+
+    // ---- RateLimiter ----
+
+    #[test]
+    fn rate_limiter_new_ip_not_locked() {
+        let rl = RateLimiter::new();
+        let ip: IpAddr = "10.0.0.1".parse().unwrap();
+        assert!(!rl.is_locked_out(&ip));
+    }
+
+    #[test]
+    fn rate_limiter_below_threshold_not_locked() {
+        let rl = RateLimiter::new();
+        let ip: IpAddr = "10.0.0.1".parse().unwrap();
+        for _ in 0..(MAX_FAILED_ATTEMPTS - 1) {
+            rl.record_failure(&ip);
+        }
+        assert!(!rl.is_locked_out(&ip));
+    }
+
+    #[test]
+    fn rate_limiter_at_threshold_locked() {
+        let rl = RateLimiter::new();
+        let ip: IpAddr = "10.0.0.2".parse().unwrap();
+        for _ in 0..MAX_FAILED_ATTEMPTS {
+            rl.record_failure(&ip);
+        }
+        assert!(rl.is_locked_out(&ip));
+    }
+
+    #[test]
+    fn rate_limiter_different_ips_independent() {
+        let rl = RateLimiter::new();
+        let ip1: IpAddr = "10.0.0.1".parse().unwrap();
+        let ip2: IpAddr = "10.0.0.2".parse().unwrap();
+        for _ in 0..MAX_FAILED_ATTEMPTS {
+            rl.record_failure(&ip1);
+        }
+        assert!(rl.is_locked_out(&ip1));
+        assert!(!rl.is_locked_out(&ip2));
+    }
+
+    #[test]
+    fn rate_limiter_ipv6() {
+        let rl = RateLimiter::new();
+        let ip: IpAddr = "::1".parse().unwrap();
+        for _ in 0..MAX_FAILED_ATTEMPTS {
+            rl.record_failure(&ip);
+        }
+        assert!(rl.is_locked_out(&ip));
+    }
+
+    // ---- SessionStore ----
+
+    #[test]
+    fn session_store_create_and_validate() {
+        let store = SessionStore::new();
+        let token = store.create_session();
+        assert!(!token.is_empty());
+        assert!(store.is_valid(&token));
+    }
+
+    #[test]
+    fn session_store_invalid_token() {
+        let store = SessionStore::new();
+        assert!(!store.is_valid("nonexistent_token"));
+    }
+
+    #[test]
+    fn session_store_empty_token() {
+        let store = SessionStore::new();
+        assert!(!store.is_valid(""));
+    }
+
+    #[test]
+    fn session_store_tokens_are_unique() {
+        let store = SessionStore::new();
+        let t1 = store.create_session();
+        let t2 = store.create_session();
+        assert_ne!(t1, t2);
+        assert!(store.is_valid(&t1));
+        assert!(store.is_valid(&t2));
+    }
+
+    #[test]
+    fn session_store_token_length() {
+        let store = SessionStore::new();
+        let token = store.create_session();
+        assert_eq!(token.len(), 32);
+    }
+
+    #[test]
+    fn session_store_token_is_alphanumeric() {
+        let store = SessionStore::new();
+        let token = store.create_session();
+        assert!(token.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit()));
+    }
+
+    // ---- response helpers ----
+
+    #[test]
+    fn response_from_str_ok() {
+        let resp = response_from_str("hello", "text/plain");
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(
+            resp.headers().get("content-type").unwrap().to_str().unwrap(),
+            "text/plain"
+        );
+    }
+
+    #[test]
+    fn response_not_found_status() {
+        let resp = response_not_found();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[test]
+    fn boxed_response_status_and_content_type() {
+        let resp = boxed_response(StatusCode::BAD_REQUEST, "text/plain", "bad");
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(
+            resp.headers().get("content-type").unwrap().to_str().unwrap(),
+            "text/plain"
+        );
+    }
+
+    #[test]
+    fn boxed_response_ok_json() {
+        let resp = boxed_response(StatusCode::OK, "application/json", r#"{"ok":true}"#);
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    // ---- WebServerConfig ----
+
+    #[test]
+    fn web_server_config_no_access_code() {
+        let config = WebServerConfig::new(
+            "127.0.0.1:8080".parse().unwrap(),
+            None, None, None, None, None, false,
+        );
+        assert!(config.access_code.is_none());
+        assert!(config.access_code_hash.is_none());
+    }
+
+    #[test]
+    fn web_server_config_with_access_code_hashes() {
+        let config = WebServerConfig::new(
+            "0.0.0.0:1701".parse().unwrap(),
+            Some("testcode".into()),
+            None, None, None, None, false,
+        );
+        assert_eq!(config.access_code.as_deref(), Some("testcode"));
+        assert!(config.access_code_hash.is_some());
+        // The hash should verify against the original code
+        assert!(verify_access_code("testcode", config.access_code_hash.as_ref().unwrap()));
+    }
+}
