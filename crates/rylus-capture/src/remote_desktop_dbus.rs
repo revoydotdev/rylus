@@ -51,8 +51,8 @@ pub trait OrgFreedesktopPortalSession {
     fn close(&self) -> Result<(), dbus::Error>;
 }
 
-impl<'a, T: blocking::BlockingSender, C: ::std::ops::Deref<Target = T>>
-    OrgFreedesktopPortalSession for blocking::Proxy<'a, C>
+impl<'a, T: blocking::BlockingSender, C: ::std::ops::Deref<Target = T>> OrgFreedesktopPortalSession
+    for blocking::Proxy<'a, C>
 {
     fn close(&self) -> Result<(), dbus::Error> {
         self.method_call("org.freedesktop.portal.Session", "Close", ())

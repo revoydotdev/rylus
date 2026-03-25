@@ -27,6 +27,16 @@ use crate::remote_desktop_dbus::{
     OrgFreedesktopPortalScreenCast, OrgFreedesktopPortalSession,
 };
 
+type PortalSessionResult = Result<
+    (
+        SyncConnection,
+        dbus::Path<'static>,
+        OwnedFd,
+        Vec<PwStreamInfo>,
+    ),
+    Box<dyn Error>,
+>;
+
 #[derive(Debug, Clone, Copy)]
 struct PwStreamInfo {
     path: u64,
@@ -84,7 +94,10 @@ impl Drop for PortalSession {
         );
         match OrgFreedesktopPortalSession::close(&proxy) {
             Ok(()) => debug!("Closed portal session {}", self.session_handle),
-            Err(e) => debug!("Failed to close portal session {}: {}", self.session_handle, e),
+            Err(e) => debug!(
+                "Failed to close portal session {}: {}",
+                self.session_handle, e
+            ),
         }
     }
 }
@@ -103,9 +116,7 @@ static PORTAL_CACHE: LazyLock<Mutex<Option<Weak<PortalSession>>>> =
     LazyLock::new(|| Mutex::new(None));
 
 /// Try to reuse a cached portal session, or create a new one.
-fn acquire_portal_session(
-    capture_cursor: bool,
-) -> Result<Arc<PortalSession>, Box<dyn Error>> {
+fn acquire_portal_session(capture_cursor: bool) -> Result<Arc<PortalSession>, Box<dyn Error>> {
     // Fast path: try the cache without holding the acquisition lock.
     {
         let cache = PORTAL_CACHE.lock().unwrap_or_else(|e| e.into_inner());
@@ -135,7 +146,10 @@ fn acquire_portal_session(
         if let Some(weak) = cache.as_ref() {
             if let Some(session) = weak.upgrade() {
                 if session.capture_cursor == capture_cursor {
-                    debug!("Reusing portal session {} (acquired by another thread)", session.session_handle);
+                    debug!(
+                        "Reusing portal session {} (acquired by another thread)",
+                        session.session_handle
+                    );
                     return Ok(session);
                 }
             }
@@ -143,7 +157,10 @@ fn acquire_portal_session(
     }
 
     // Nobody has a usable session — create a new one.
-    info!("Creating new portal session (capture_cursor={})", capture_cursor);
+    info!(
+        "Creating new portal session (capture_cursor={})",
+        capture_cursor
+    );
     let (conn, session_handle, fd, streams) = request_remote_desktop(capture_cursor)?;
 
     let session = Arc::new(PortalSession {
@@ -1145,9 +1162,7 @@ fn on_start_response(
     Ok(())
 }
 
-fn request_remote_desktop(
-    capture_cursor: bool,
-) -> Result<(SyncConnection, dbus::Path<'static>, OwnedFd, Vec<PwStreamInfo>), Box<dyn Error>> {
+fn request_remote_desktop(capture_cursor: bool) -> PortalSessionResult {
     let conn = SyncConnection::new_session()?;
     let portal = get_portal(&conn);
 
