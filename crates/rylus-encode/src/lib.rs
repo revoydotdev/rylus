@@ -1034,7 +1034,10 @@ impl VideoEncoder {
                 if bgr0.len() < expected {
                     warn!(
                         "BGR0 buffer too small: {} bytes for {}x{} (need {})",
-                        bgr0.len(), w, h, expected
+                        bgr0.len(),
+                        w,
+                        h,
+                        expected
                     );
                     return;
                 }
@@ -1053,7 +1056,10 @@ impl VideoEncoder {
                 if bgr0.len() < expected {
                     warn!(
                         "BGR0S buffer too small: {} bytes for stride {} x {} rows (need {})",
-                        bgr0.len(), stride, h, expected
+                        bgr0.len(),
+                        stride,
+                        h,
+                        expected
                     );
                     return;
                 }
@@ -1072,7 +1078,10 @@ impl VideoEncoder {
                 if rgb.len() < expected {
                     warn!(
                         "RGB buffer too small: {} bytes for {}x{} (need {})",
-                        rgb.len(), w, h, expected
+                        rgb.len(),
+                        w,
+                        h,
+                        expected
                     );
                     return;
                 }
@@ -1091,7 +1100,10 @@ impl VideoEncoder {
                 if rgb0.len() < expected {
                     warn!(
                         "RGB0 buffer too small: {} bytes for {}x{} (need {})",
-                        rgb0.len(), w, h, expected
+                        rgb0.len(),
+                        w,
+                        h,
+                        expected
                     );
                     return;
                 }
