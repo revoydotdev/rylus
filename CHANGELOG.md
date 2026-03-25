@@ -1,5 +1,31 @@
 # Changelog
 
+## [0.16.0] - 2026-03-24
+
+### Added
+
+- **Portal session caching:** PipeWire capturables now share a single portal
+  session via a global `Weak<PortalSession>` cache, eliminating redundant
+  `CreateSession` D-Bus calls and compositor prompts
+- **Portal session RAII:** `PortalSession` calls
+  `org.freedesktop.portal.Session.Close()` on drop, preventing leaked
+  compositor sessions
+- **Capture failure auto-teardown:** Video loop tears down the recorder
+  and notifies the client after 30 consecutive capture failures instead of
+  spinning indefinitely
+
+### Fixed
+
+- **DMA-BUF/MemFd SEGV:** Removed `MAP_BUFFERS` flag and manually mmap
+  DMA-BUF and MemFd buffers with proper `DMA_BUF_IOCTL_SYNC`, preventing
+  segfaults from PipeWire's broken auto-mmap on DMA-BUF file descriptors
+- **Encoder buffer validation:** Added bounds checks for BGR0, BGR0S, RGB,
+  and RGB0 pixel buffers before writing raw pointers into FFmpeg's AVFrame
+- **PipeWire stream error detection:** Stream Error/Unconnected states are
+  now tracked and surfaced from `capture()` instead of silently spinning
+- **PipeWireRecorder drop order:** Fields reordered so listener drops before
+  stream before mainloop, preventing use-after-free during teardown
+
 ## [0.15.1] - 2026-03-20
 
 ### Fixed
