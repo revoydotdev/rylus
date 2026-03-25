@@ -451,6 +451,10 @@ fn handle_video<S: RylusSender + Clone + Send + 'static>(
     // Frame drop metrics
     let mut frames_total: u64 = 0;
     let mut frames_dropped: u64 = 0;
+
+    // Consecutive capture failure tracking
+    let mut consecutive_capture_failures: u32 = 0;
+    const MAX_CAPTURE_FAILURES: u32 = 30;
     let mut last_stats_log = Instant::now();
 
     loop {
@@ -531,7 +535,7 @@ fn handle_video<S: RylusSender + Clone + Send + 'static>(
             }
             Err(RecvTimeoutError::Timeout) => {
                 last_frame = next_frame;
-                let recorder = match recorder.as_mut() {
+                let rec = match recorder.as_mut() {
                     Some(r) => r,
                     None => {
                         warn!("Screen capture not initialized, can not send video frame!");
@@ -539,10 +543,29 @@ fn handle_video<S: RylusSender + Clone + Send + 'static>(
                     }
                 };
                 let capture_start = Instant::now();
-                let pixel_data = match recorder.capture() {
-                    Ok(p) => p,
+                let capture_result = rec.capture();
+                let pixel_data = match capture_result {
+                    Ok(p) => {
+                        consecutive_capture_failures = 0;
+                        p
+                    }
                     Err(err) => {
-                        warn!("Error capturing screen: {}", err);
+                        consecutive_capture_failures += 1;
+                        if consecutive_capture_failures >= MAX_CAPTURE_FAILURES {
+                            warn!(
+                                "Screen capture failed {} times in a row, giving up: {}",
+                                consecutive_capture_failures, err
+                            );
+                            recorder = None;
+                            send_message(
+                                &mut { sender.clone() },
+                                MessageOutbound::Error(
+                                    "Screen capture lost — please reconnect.".into(),
+                                ),
+                            );
+                        } else {
+                            warn!("Error capturing screen: {}", err);
+                        }
                         continue;
                     }
                 };
