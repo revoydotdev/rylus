@@ -1,9 +1,11 @@
 use std::collections::HashMap;
 use std::error::Error;
 use std::os::unix::io::{AsRawFd, FromRawFd};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, LazyLock, Mutex, Weak};
 use std::time::Duration;
-use tracing::{debug, trace, warn};
+use tracing::{debug, info, trace, warn};
+
+use pw::spa::buffer::DataType;
 
 use dbus::{
     arg::{OwnedFd, PropMap, RefArg, Variant},
@@ -22,7 +24,7 @@ use rylus_core::pixel::PixelProvider;
 
 use crate::remote_desktop_dbus::{
     OrgFreedesktopPortalRemoteDesktop, OrgFreedesktopPortalRequestResponse,
-    OrgFreedesktopPortalScreenCast,
+    OrgFreedesktopPortalScreenCast, OrgFreedesktopPortalSession,
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -55,19 +57,129 @@ impl std::fmt::Display for PipeWireError {
 
 impl Error for PipeWireError {}
 
+// ---------------------------------------------------------------------------
+// Portal session management: RAII cleanup + global cache
+// ---------------------------------------------------------------------------
+
+/// Holds a D-Bus portal session and closes it on drop.
+///
+/// The portal session (ScreenCast or RemoteDesktop) remains active on the
+/// compositor side until explicitly closed.  Wrapping it in this struct
+/// ensures `org.freedesktop.portal.Session.Close()` is called exactly once,
+/// when the last `Arc<PortalSession>` reference is dropped.
+pub(crate) struct PortalSession {
+    conn: SyncConnection,
+    session_handle: dbus::Path<'static>,
+    fd: OwnedFd,
+    streams: Vec<PwStreamInfo>,
+    capture_cursor: bool,
+}
+
+impl Drop for PortalSession {
+    fn drop(&mut self) {
+        let proxy = self.conn.with_proxy(
+            "org.freedesktop.portal.Desktop",
+            &self.session_handle,
+            Duration::from_millis(500),
+        );
+        match OrgFreedesktopPortalSession::close(&proxy) {
+            Ok(()) => debug!("Closed portal session {}", self.session_handle),
+            Err(e) => debug!("Failed to close portal session {}: {}", self.session_handle, e),
+        }
+    }
+}
+
+/// Serializes portal acquisition so only one thread negotiates with the
+/// compositor at a time.  Other callers block on this Rust mutex instead
+/// of spamming D-Bus with concurrent `CreateSession` requests.
+static PORTAL_ACQUIRE_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
+
+/// Weak reference to the most recent portal session.  If any
+/// `PipeWireCapturable` / `PipeWireRecorder` still holds an `Arc`, the
+/// `Weak` can be upgraded and the session reused.  When all consumers are
+/// gone the session is closed via `Drop`, and the next caller creates a
+/// fresh one.
+static PORTAL_CACHE: LazyLock<Mutex<Option<Weak<PortalSession>>>> =
+    LazyLock::new(|| Mutex::new(None));
+
+/// Try to reuse a cached portal session, or create a new one.
+fn acquire_portal_session(
+    capture_cursor: bool,
+) -> Result<Arc<PortalSession>, Box<dyn Error>> {
+    // Fast path: try the cache without holding the acquisition lock.
+    {
+        let cache = PORTAL_CACHE.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(weak) = cache.as_ref() {
+            if let Some(session) = weak.upgrade() {
+                if session.capture_cursor == capture_cursor {
+                    debug!("Reusing cached portal session {}", session.session_handle);
+                    return Ok(session);
+                }
+                debug!(
+                    "Cached session has capture_cursor={}, need {}; will create new session",
+                    session.capture_cursor, capture_cursor
+                );
+            }
+        }
+    }
+
+    // Slow path: acquire the serialization lock so only one thread talks
+    // to the portal at a time.
+    let _guard = PORTAL_ACQUIRE_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+
+    // Re-check cache: another thread may have acquired while we waited.
+    {
+        let cache = PORTAL_CACHE.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(weak) = cache.as_ref() {
+            if let Some(session) = weak.upgrade() {
+                if session.capture_cursor == capture_cursor {
+                    debug!("Reusing portal session {} (acquired by another thread)", session.session_handle);
+                    return Ok(session);
+                }
+            }
+        }
+    }
+
+    // Nobody has a usable session — create a new one.
+    info!("Creating new portal session (capture_cursor={})", capture_cursor);
+    let (conn, session_handle, fd, streams) = request_remote_desktop(capture_cursor)?;
+
+    let session = Arc::new(PortalSession {
+        conn,
+        session_handle,
+        fd,
+        streams,
+        capture_cursor,
+    });
+
+    // Store a Weak so future callers can reuse this session.
+    {
+        let mut cache = PORTAL_CACHE.lock().unwrap_or_else(|e| e.into_inner());
+        *cache = Some(Arc::downgrade(&session));
+    }
+
+    Ok(session)
+}
+
+// ---------------------------------------------------------------------------
+// PipeWireCapturable
+// ---------------------------------------------------------------------------
+
 #[derive(Clone)]
 pub struct PipeWireCapturable {
-    // connection needs to be kept alive for recording
-    dbus_conn: Arc<SyncConnection>,
+    /// Keeps the portal session (and D-Bus connection) alive.
+    portal_session: Arc<PortalSession>,
     fd: OwnedFd,
     path: u64,
     source_type: u64,
 }
 
 impl PipeWireCapturable {
-    fn new(conn: Arc<SyncConnection>, fd: OwnedFd, stream: PwStreamInfo) -> Self {
+    fn new(portal_session: Arc<PortalSession>, fd: OwnedFd, stream: PwStreamInfo) -> Self {
         Self {
-            dbus_conn: conn,
+            portal_session,
             fd,
             path: stream.path,
             source_type: stream.source_type,
@@ -79,8 +191,8 @@ impl std::fmt::Debug for PipeWireCapturable {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "PipeWireCapturable {{dbus: {}, fd: {}, path: {}, source_type: {}}}",
-            self.dbus_conn.unique_name(),
+            "PipeWireCapturable {{session: {}, fd: {}, path: {}, source_type: {}}}",
+            self.portal_session.session_handle,
             self.fd.as_raw_fd(),
             self.path,
             self.source_type
@@ -131,16 +243,19 @@ pub struct PipeWireRecorder {
     video_format: VideoFormat,
     /// Whether we have at least one valid frame.
     has_frame: bool,
-    /// The PipeWire main loop handle - kept alive to drive iteration.
-    mainloop: pw::main_loop::MainLoopRc,
-    /// The stream - must stay alive while recording.
-    _stream: pw::stream::StreamRc,
-    /// The listener - must stay alive while the stream is active.
-    _listener: pw::stream::StreamListener<StreamUserData>,
     /// Shared state updated by the PipeWire stream callbacks.
     shared: Arc<Mutex<SharedFrameState>>,
-    /// Keep the D-Bus connection alive for the duration of recording.
-    _dbus_conn: Arc<SyncConnection>,
+    // NOTE: Drop order matters! The listener must be dropped before the stream,
+    // and the stream before the mainloop, to avoid use-after-free in PipeWire's
+    // C code during teardown.
+    /// The listener - must be dropped first to unregister callbacks.
+    _listener: pw::stream::StreamListener<StreamUserData>,
+    /// The stream - must be dropped after listener but before mainloop.
+    _stream: pw::stream::StreamRc,
+    /// The PipeWire main loop handle - must outlive stream and listener.
+    mainloop: pw::main_loop::MainLoopRc,
+    /// Keep the portal session (and D-Bus connection) alive for recording.
+    _portal_session: Arc<PortalSession>,
 }
 
 /// Shared state between the PipeWire stream callbacks and the recorder.
@@ -159,6 +274,8 @@ struct SharedFrameState {
     format_valid: bool,
     /// Whether a new frame is available since last read.
     new_frame: bool,
+    /// Whether the PipeWire stream has entered an error or unconnected state.
+    stream_error: bool,
 }
 
 impl PipeWireRecorder {
@@ -205,8 +322,10 @@ impl PipeWireRecorder {
             video_format: VideoFormat::Unknown,
             format_valid: false,
             new_frame: false,
+            stream_error: false,
         }));
 
+        let shared_for_state = shared.clone();
         let shared_for_param = shared.clone();
         let shared_for_process = shared.clone();
 
@@ -214,8 +333,18 @@ impl PipeWireRecorder {
 
         let listener = stream
             .add_local_listener_with_user_data(user_data)
-            .state_changed(|_, _, old, new| {
+            .state_changed(move |_, _, old, new| {
                 debug!("PipeWire stream state changed: {:?} -> {:?}", old, new);
+                if matches!(
+                    new,
+                    pw::stream::StreamState::Error(_)
+                        | pw::stream::StreamState::Unconnected
+                ) {
+                    warn!("PipeWire stream entered terminal state: {:?}", new);
+                    if let Ok(mut state) = shared_for_state.lock() {
+                        state.stream_error = true;
+                    }
+                }
             })
             .param_changed(move |_, user_data, id, param| {
                 let Some(param) = param else {
@@ -285,24 +414,6 @@ impl PipeWireRecorder {
                     return;
                 }
 
-                let Some(slice) = data.data() else {
-                    return;
-                };
-
-                // The usable data starts at chunk_offset and has chunk_size bytes.
-                let end = chunk_offset + chunk_size;
-                if end > slice.len() {
-                    trace!(
-                        "PipeWire buffer overflow: offset {} + size {} > buffer len {}",
-                        chunk_offset,
-                        chunk_size,
-                        slice.len()
-                    );
-                    return;
-                }
-
-                let frame_data = &slice[chunk_offset..end];
-
                 let w = user_data.format.size().width as usize;
                 let h = user_data.format.size().height as usize;
                 let bpp = bytes_per_pixel(user_data.format.format());
@@ -312,7 +423,6 @@ impl PipeWireRecorder {
                     return;
                 }
 
-                // Validate buffer size: stride * height should match chunk_size
                 let expected_stride = if chunk_stride > 0 {
                     chunk_stride
                 } else {
@@ -323,19 +433,49 @@ impl PipeWireRecorder {
                 if chunk_size < expected_size {
                     trace!(
                         "PipeWire buffer size mismatch: got {} bytes, expected {} ({}x{}@{}bpp, stride={})",
-                        chunk_size,
-                        expected_size,
-                        w,
-                        h,
-                        bpp,
-                        expected_stride,
+                        chunk_size, expected_size, w, h, bpp, expected_stride,
                     );
                     return;
                 }
 
+                // Read the frame data from the buffer.  We do NOT use MAP_BUFFERS
+                // because PipeWire's automatic mmap can silently produce broken
+                // mappings for DMA-BUF buffers (SEGV on access).  Instead we
+                // handle each data type explicitly with error checking.
+                let data_type = data.type_();
+                let frame_data: Option<Vec<u8>> = if data_type == DataType::MemPtr {
+                    // Direct memory pointer — safe to access via data.data().
+                    if let Some(slice) = data.data() {
+                        let end = chunk_offset + chunk_size;
+                        if end <= slice.len() {
+                            Some(slice[chunk_offset..end].to_vec())
+                        } else {
+                            trace!("MemPtr buffer overflow");
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                } else if data_type == DataType::DmaBuf || data_type == DataType::MemFd {
+                    // DMA-BUF or MemFd — manually mmap with error handling.
+                    let fd = data.fd();
+                    if fd < 0 {
+                        trace!("Invalid fd for {:?} buffer", data_type);
+                        None
+                    } else {
+                        mmap_buffer_data(fd, chunk_offset, chunk_size, data_type == DataType::DmaBuf)
+                    }
+                } else {
+                    trace!("Unsupported PipeWire buffer data type: {:?}", data_type);
+                    None
+                };
+
+                let Some(frame_data) = frame_data else {
+                    return;
+                };
+
                 if let Ok(mut state) = shared_for_process.lock() {
-                    state.frame.clear();
-                    state.frame.extend_from_slice(frame_data);
+                    state.frame = frame_data;
                     state.width = w;
                     state.height = h;
                     state.stride = expected_stride;
@@ -419,7 +559,7 @@ impl PipeWireRecorder {
             .connect(
                 spa::utils::Direction::Input,
                 Some(capturable.path as u32),
-                pw::stream::StreamFlags::AUTOCONNECT | pw::stream::StreamFlags::MAP_BUFFERS,
+                pw::stream::StreamFlags::AUTOCONNECT,
                 &mut params,
             )
             .map_err(|e| PipeWireError(format!("Failed to connect PipeWire stream: {}", e)))?;
@@ -457,12 +597,91 @@ impl PipeWireRecorder {
             stride: 0,
             video_format: VideoFormat::Unknown,
             has_frame: false,
-            mainloop,
-            _stream: stream,
-            _listener: listener,
             shared,
-            _dbus_conn: capturable.dbus_conn,
+            _listener: listener,
+            _stream: stream,
+            mainloop,
+            _portal_session: capturable.portal_session,
         })
+    }
+}
+
+/// Manually mmap a DMA-BUF or MemFd buffer and copy the data out.
+///
+/// Returns `None` if the mapping fails (instead of segfaulting like
+/// PipeWire's automatic `MAP_BUFFERS` would).
+fn mmap_buffer_data(fd: i32, offset: usize, size: usize, is_dmabuf: bool) -> Option<Vec<u8>> {
+    if size == 0 {
+        return None;
+    }
+
+    // For DMA-BUF, signal CPU access start.
+    if is_dmabuf {
+        dmabuf_sync_start(fd);
+    }
+
+    let ptr = unsafe {
+        libc::mmap(
+            std::ptr::null_mut(),
+            size,
+            libc::PROT_READ,
+            libc::MAP_SHARED,
+            fd,
+            offset as libc::off_t,
+        )
+    };
+
+    if ptr == libc::MAP_FAILED || ptr.is_null() {
+        if is_dmabuf {
+            dmabuf_sync_end(fd);
+        }
+        trace!(
+            "Failed to mmap buffer (fd={}, offset={}, size={}): {}",
+            fd,
+            offset,
+            size,
+            std::io::Error::last_os_error()
+        );
+        return None;
+    }
+
+    // SAFETY: mmap succeeded, ptr is valid for `size` bytes.
+    let data = unsafe { std::slice::from_raw_parts(ptr as *const u8, size) }.to_vec();
+
+    unsafe {
+        libc::munmap(ptr, size);
+    }
+
+    if is_dmabuf {
+        dmabuf_sync_end(fd);
+    }
+
+    Some(data)
+}
+
+// DMA-BUF sync ioctl constants.
+// struct dma_buf_sync { __u64 flags; }
+// DMA_BUF_IOCTL_SYNC = _IOW('b', 0, struct dma_buf_sync)
+const DMA_BUF_SYNC_READ: u64 = 1;
+const DMA_BUF_SYNC_START: u64 = 0;
+const DMA_BUF_SYNC_END: u64 = 1 << 2;
+
+// _IOW('b', 0, 8) on Linux: direction=1 (write), type='b'=0x62, nr=0, size=8
+// = (1 << 30) | (0x62 << 8) | (0 << 0) | (8 << 16) = 0x40086200
+#[cfg(target_endian = "little")]
+const DMA_BUF_IOCTL_SYNC: libc::c_ulong = 0x4008_6200;
+
+fn dmabuf_sync_start(fd: i32) {
+    let flags: u64 = DMA_BUF_SYNC_READ | DMA_BUF_SYNC_START;
+    unsafe {
+        libc::ioctl(fd, DMA_BUF_IOCTL_SYNC, &flags as *const u64);
+    }
+}
+
+fn dmabuf_sync_end(fd: i32) {
+    let flags: u64 = DMA_BUF_SYNC_READ | DMA_BUF_SYNC_END;
+    unsafe {
+        libc::ioctl(fd, DMA_BUF_IOCTL_SYNC, &flags as *const u64);
     }
 }
 
@@ -476,6 +695,16 @@ fn bytes_per_pixel(format: VideoFormat) -> usize {
 
 impl Recorder for PipeWireRecorder {
     fn capture(&mut self) -> Result<PixelProvider<'_>, Box<dyn Error>> {
+        // Check if the PipeWire stream has entered an error state before iterating.
+        {
+            let state = self.shared.lock().unwrap();
+            if state.stream_error {
+                return Err(Box::new(PipeWireError(
+                    "PipeWire stream is in an error state".into(),
+                )));
+            }
+        }
+
         // Drive the PipeWire main loop to process new buffers.
         // We iterate a few times to give PipeWire a chance to deliver frames.
         for _ in 0..3 {
@@ -485,6 +714,11 @@ impl Recorder for PipeWireRecorder {
         // Check if we got a new frame from the stream callbacks.
         {
             let mut state = self.shared.lock().unwrap();
+            if state.stream_error {
+                return Err(Box::new(PipeWireError(
+                    "PipeWire stream is in an error state".into(),
+                )));
+            }
             if state.new_frame {
                 self.frame_buffer.clear();
                 std::mem::swap(&mut self.frame_buffer, &mut state.frame);
@@ -913,7 +1147,7 @@ fn on_start_response(
 
 fn request_remote_desktop(
     capture_cursor: bool,
-) -> Result<(SyncConnection, OwnedFd, Vec<PwStreamInfo>), Box<dyn Error>> {
+) -> Result<(SyncConnection, dbus::Path<'static>, OwnedFd, Vec<PwStreamInfo>), Box<dyn Error>> {
     let conn = SyncConnection::new_session()?;
     let portal = get_portal(&conn);
 
@@ -986,7 +1220,8 @@ fn request_remote_desktop(
                     .into(),
             )))
         } else {
-            Ok((conn, fd.clone(), streams.clone()))
+            let session_handle = context.session.clone();
+            Ok((conn, session_handle, fd.clone(), streams.clone()))
         }
     } else {
         Err(Box::new(DBusError(
@@ -998,10 +1233,10 @@ fn request_remote_desktop(
 }
 
 pub fn get_capturables(capture_cursor: bool) -> Result<Vec<PipeWireCapturable>, Box<dyn Error>> {
-    let (conn, fd, streams) = request_remote_desktop(capture_cursor)?;
-    let conn = Arc::new(conn);
-    Ok(streams
-        .into_iter()
-        .map(|s| PipeWireCapturable::new(conn.clone(), fd.clone(), s))
+    let session = acquire_portal_session(capture_cursor)?;
+    Ok(session
+        .streams
+        .iter()
+        .map(|s| PipeWireCapturable::new(session.clone(), session.fd.clone(), *s))
         .collect())
 }
