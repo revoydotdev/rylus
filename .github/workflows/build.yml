@@ -60,6 +60,8 @@ jobs:
           ~/.cargo/git
           target
         key: ${{ runner.os }}-cargo-${{ hashFiles('Cargo.lock') }}
+    - name: Install PipeWire dev libraries
+      run: apt-get update && apt-get install -y libpipewire-0.3-dev
     - name: Build
       run: ./docker_build.sh
       shell: bash
@@ -97,6 +99,8 @@ jobs:
           ~/.cargo/git
           target
         key: ${{ runner.os }}-alpine-cargo-${{ hashFiles('Cargo.lock') }}
+    - name: Install PipeWire dev libraries
+      run: apk add --no-cache pipewire-dev
     - name: Install JS deps
       run: npm install
     - name: Build
