@@ -1029,40 +1029,76 @@ impl VideoEncoder {
         };
 
         let scaler = match pixel_provider {
-            PixelProvider::BGR0(w, _, bgr0) => {
+            PixelProvider::BGR0(w, h, bgr0) => {
+                let expected = w * h * 4;
+                if bgr0.len() < expected {
+                    warn!(
+                        "BGR0 buffer too small: {} bytes for {}x{} (need {})",
+                        bgr0.len(), w, h, expected
+                    );
+                    return;
+                }
                 let s = scalers.bgr0.as_mut().expect("BGR0 scaler not initialized");
                 // SAFETY: frame_in is a valid AVFrame allocated in ScaleContext::new.
                 // The pixel data pointer is valid for the duration of this encode call.
+                // Buffer size validated above.
                 unsafe {
                     (*s.frame_in).data[0] = bgr0.as_ptr() as *mut u8;
                     (*s.frame_in).linesize[0] = (w * 4) as c_int;
                 }
                 s
             }
-            PixelProvider::BGR0S(_, _, stride, bgr0) => {
+            PixelProvider::BGR0S(_, h, stride, bgr0) => {
+                let expected = stride * h;
+                if bgr0.len() < expected {
+                    warn!(
+                        "BGR0S buffer too small: {} bytes for stride {} x {} rows (need {})",
+                        bgr0.len(), stride, h, expected
+                    );
+                    return;
+                }
                 let s = scalers.bgr0.as_mut().expect("BGR0 scaler not initialized");
                 // SAFETY: frame_in is a valid AVFrame allocated in ScaleContext::new.
                 // The pixel data pointer is valid for the duration of this encode call.
+                // Buffer size validated above.
                 unsafe {
                     (*s.frame_in).data[0] = bgr0.as_ptr() as *mut u8;
                     (*s.frame_in).linesize[0] = stride as c_int;
                 }
                 s
             }
-            PixelProvider::RGB(w, _, rgb) => {
+            PixelProvider::RGB(w, h, rgb) => {
+                let expected = w * h * 3;
+                if rgb.len() < expected {
+                    warn!(
+                        "RGB buffer too small: {} bytes for {}x{} (need {})",
+                        rgb.len(), w, h, expected
+                    );
+                    return;
+                }
                 let s = scalers.rgb.as_mut().expect("RGB scaler not initialized");
                 // SAFETY: frame_in is a valid AVFrame allocated in ScaleContext::new.
                 // The pixel data pointer is valid for the duration of this encode call.
+                // Buffer size validated above.
                 unsafe {
                     (*s.frame_in).data[0] = rgb.as_ptr() as *mut u8;
                     (*s.frame_in).linesize[0] = (w * 3) as c_int;
                 }
                 s
             }
-            PixelProvider::RGB0(w, _, rgb0) => {
+            PixelProvider::RGB0(w, h, rgb0) => {
+                let expected = w * h * 4;
+                if rgb0.len() < expected {
+                    warn!(
+                        "RGB0 buffer too small: {} bytes for {}x{} (need {})",
+                        rgb0.len(), w, h, expected
+                    );
+                    return;
+                }
                 let s = scalers.rgb0.as_mut().expect("RGB0 scaler not initialized");
                 // SAFETY: frame_in is a valid AVFrame allocated in ScaleContext::new.
                 // The pixel data pointer is valid for the duration of this encode call.
+                // Buffer size validated above.
                 unsafe {
                     (*s.frame_in).data[0] = rgb0.as_ptr() as *mut u8;
                     (*s.frame_in).linesize[0] = (w * 4) as c_int;
