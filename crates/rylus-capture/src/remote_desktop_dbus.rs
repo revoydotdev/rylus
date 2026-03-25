@@ -47,6 +47,18 @@ impl<'a, T: blocking::BlockingSender, C: ::std::ops::Deref<Target = T>> OrgFreed
     }
 }
 
+pub trait OrgFreedesktopPortalSession {
+    fn close(&self) -> Result<(), dbus::Error>;
+}
+
+impl<'a, T: blocking::BlockingSender, C: ::std::ops::Deref<Target = T>>
+    OrgFreedesktopPortalSession for blocking::Proxy<'a, C>
+{
+    fn close(&self) -> Result<(), dbus::Error> {
+        self.method_call("org.freedesktop.portal.Session", "Close", ())
+    }
+}
+
 pub trait OrgFreedesktopPortalScreenCast {
     fn create_session(&self, options: arg::PropMap) -> Result<dbus::Path<'static>, dbus::Error>;
     fn select_sources(
