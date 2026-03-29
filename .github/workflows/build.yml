@@ -129,6 +129,7 @@ jobs:
 
   build-macos:
     needs: quality
+    if: startsWith(github.ref, 'refs/tags/')
     strategy:
       matrix:
         os: [macos-latest, macos-15-intel] # -latest is for Apple Silicon, -15-intel is for Intel
@@ -175,6 +176,7 @@ jobs:
 
   build-windows:
     needs: quality
+    if: startsWith(github.ref, 'refs/tags/')
     runs-on: windows-latest
     env:
       VCPKG_ROOT: C:\vcpkg
