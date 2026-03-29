@@ -50,6 +50,11 @@ pub enum MessageOutbound {
     Hello(Hello),
     CapturableList(Vec<String>),
     NewVideo,
+    /// Sent before video data to tell the client which codec string to use
+    /// for MSE addSourceBuffer (e.g. "avc1.4D4028" for Main Profile Level 4.0).
+    VideoInit {
+        codec_string: String,
+    },
     ConfigOk,
     CustomInputAreas(CustomInputAreas),
     ConfigError(String),

@@ -399,7 +399,16 @@ fn encode_thread<S: RylusSender + Clone + Send + 'static>(
                     encoder_options,
                 );
                 match res {
-                    Ok(enc) => video_encoder = Some(enc),
+                    Ok(enc) => {
+                        // Tell the client which codec string to use for MSE
+                        send_message(
+                            &mut sender,
+                            MessageOutbound::VideoInit {
+                                codec_string: enc.codec_string().to_string(),
+                            },
+                        );
+                        video_encoder = Some(enc);
+                    }
                     Err(e) => {
                         warn!("{}", e);
                         video_encoder = None;
@@ -413,6 +422,128 @@ fn encode_thread<S: RylusSender + Clone + Send + 'static>(
             }
             EncodeCommand::Stop => return,
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Adaptive quality controller
+// ---------------------------------------------------------------------------
+
+/// Minimum QP (highest quality). Below this, encoder artifacts are negligible
+/// and further decreases waste bandwidth.
+const QP_MIN: u32 = 18;
+
+/// Maximum QP (lowest quality). Above this, the stream is too degraded to be useful.
+const QP_MAX: u32 = 45;
+
+/// Default QP used on startup and after encoder restart.
+const QP_DEFAULT: u32 = 23;
+
+/// Controls video encoding quality by weighing two independent signals:
+/// - **Buffer health** (from the client): how many seconds of video are buffered.
+///   High buffer → network/decode can't keep up → raise QP (reduce quality).
+///   Low buffer → headroom available → lower QP (improve quality).
+/// - **Pipeline ratio** (local): encode time relative to frame budget.
+///   High ratio → encoder is saturated → raise QP.
+///   Low ratio → encoder has headroom → lower QP.
+///
+/// When both signals agree, the QP moves. When they conflict (buffer says raise,
+/// pipeline says lower), buffer health wins — it reflects the end-to-end bottleneck.
+struct QualityController {
+    current_qp: u32,
+    encode_time_avg: f64,
+    /// Most recent buffer health from client (seconds of buffered video).
+    buffer_health_secs: Option<f64>,
+}
+
+impl QualityController {
+    fn new() -> Self {
+        Self {
+            current_qp: QP_DEFAULT,
+            encode_time_avg: 0.0,
+            buffer_health_secs: None,
+        }
+    }
+
+    fn reset(&mut self) {
+        self.current_qp = QP_DEFAULT;
+        self.encode_time_avg = 0.0;
+        self.buffer_health_secs = None;
+    }
+
+    /// Update the buffer health signal from the client.
+    fn set_buffer_health(&mut self, secs: f64) {
+        self.buffer_health_secs = Some(secs);
+    }
+
+    /// Update the local encode time (exponential moving average).
+    fn record_encode_time(&mut self, elapsed_secs: f64) {
+        self.encode_time_avg = 0.3 * elapsed_secs + 0.7 * self.encode_time_avg;
+    }
+
+    /// Decide the new QP based on both signals. Returns Some(new_qp) if a change
+    /// is needed, None if QP should stay the same.
+    fn decide(&mut self, frame_budget_secs: f64) -> Option<u32> {
+        // Buffer health signal: the end-to-end indicator.
+        let buffer_delta = self.buffer_health_secs.map(|b| {
+            if b > 3.0 {
+                2i32 // Severely overloaded, aggressive reduction
+            } else if b > 2.0 {
+                1 // Mildly overloaded
+            } else if b < 0.5 && self.current_qp > QP_MIN {
+                -1 // Headroom available
+            } else {
+                0
+            }
+        });
+
+        // Pipeline ratio signal: local encode performance.
+        let pipeline_delta = if frame_budget_secs > 0.0 && frame_budget_secs < 1.0 {
+            let ratio = self.encode_time_avg / frame_budget_secs;
+            if ratio > 0.8 && self.current_qp < QP_MAX {
+                Some(1i32)
+            } else if ratio < 0.4 && self.current_qp > QP_MIN {
+                Some(-1)
+            } else {
+                Some(0)
+            }
+        } else {
+            None
+        };
+
+        // Combine: buffer health takes priority when it disagrees.
+        let delta = match (buffer_delta, pipeline_delta) {
+            (Some(bd), Some(pd)) => {
+                if bd != 0 {
+                    bd // Buffer health always wins when it has an opinion
+                } else {
+                    pd // Buffer neutral → use pipeline signal
+                }
+            }
+            (Some(bd), None) => bd,
+            (None, Some(pd)) => pd,
+            (None, None) => 0,
+        };
+
+        // Clear one-shot buffer signal after consumption.
+        self.buffer_health_secs = None;
+
+        if delta == 0 {
+            return None;
+        }
+
+        let new_qp = (self.current_qp as i32 + delta).clamp(QP_MIN as i32, QP_MAX as i32) as u32;
+        if new_qp != self.current_qp {
+            self.current_qp = new_qp;
+            Some(new_qp)
+        } else {
+            None
+        }
+    }
+
+    #[cfg(test)]
+    fn qp(&self) -> u32 {
+        self.current_qp
     }
 }
 
@@ -438,9 +569,7 @@ fn handle_video<S: RylusSender + Clone + Send + 'static>(
     let mut last_frame = Instant::now();
     let mut paused = false;
 
-    // Adaptive quality state
-    let mut current_qp: u32 = 23;
-    let mut encode_time_avg: f64 = 0.0;
+    let mut quality = QualityController::new();
 
     // Track current encoder dimensions to know when to restart
     let mut enc_width_in: usize = 0;
@@ -512,26 +641,10 @@ fn handle_video<S: RylusSender + Clone + Send + 'static>(
             }
             Ok(VideoCommands::Restart) => {
                 enc_width_in = 0; // Force encoder restart
-                current_qp = 23;
-                encode_time_avg = 0.0;
+                quality.reset();
             }
             Ok(VideoCommands::BufferHealth(buffer_secs)) => {
-                let new_qp = if buffer_secs > 3.0 {
-                    (current_qp + 2).min(45)
-                } else if buffer_secs > 2.0 {
-                    (current_qp + 1).min(45)
-                } else if buffer_secs < 0.5 && current_qp > 18 {
-                    current_qp - 1
-                } else {
-                    current_qp
-                };
-                if new_qp != current_qp {
-                    current_qp = new_qp;
-                    let _ = encode_tx.try_send(EncodeCommand::SetQuality(current_qp));
-                    trace!(
-                        "QP adjusted to {current_qp} based on buffer health ({buffer_secs:.1}s)"
-                    );
-                }
+                quality.set_buffer_health(buffer_secs);
             }
             Err(RecvTimeoutError::Timeout) => {
                 last_frame = next_frame;
@@ -609,8 +722,7 @@ fn handle_video<S: RylusSender + Clone + Send + 'static>(
                 frames_total += 1;
                 match encode_tx.try_send(EncodeCommand::Frame(owned)) {
                     Ok(()) => {
-                        // Track capture time for adaptive quality
-                        encode_time_avg = 0.3 * capture_elapsed + 0.7 * encode_time_avg;
+                        quality.record_encode_time(capture_elapsed);
                     }
                     Err(mpsc::TrySendError::Full(_)) => {
                         frames_dropped += 1;
@@ -634,22 +746,10 @@ fn handle_video<S: RylusSender + Clone + Send + 'static>(
                     last_stats_log = Instant::now();
                 }
 
-                // Adapt quality based on overall pipeline performance
-                let frame_budget = frame_duration.as_secs_f64();
-                if frame_budget > 0.0 && frame_budget < 1.0 {
-                    let ratio = encode_time_avg / frame_budget;
-                    let new_qp = if ratio > 0.8 && current_qp < 45 {
-                        current_qp + 1
-                    } else if ratio < 0.4 && current_qp > 18 {
-                        current_qp - 1
-                    } else {
-                        current_qp
-                    };
-                    if new_qp != current_qp {
-                        current_qp = new_qp;
-                        let _ = encode_tx.try_send(EncodeCommand::SetQuality(current_qp));
-                        trace!("QP adjusted to {current_qp} (pipeline ratio: {ratio:.2})");
-                    }
+                // Unified quality decision: weighs buffer health + pipeline ratio
+                if let Some(new_qp) = quality.decide(frame_duration.as_secs_f64()) {
+                    let _ = encode_tx.try_send(EncodeCommand::SetQuality(new_qp));
+                    trace!("QP adjusted to {new_qp}");
                 }
             }
             Err(RecvTimeoutError::Disconnected) => break,
@@ -660,5 +760,142 @@ fn handle_video<S: RylusSender + Clone + Send + 'static>(
     let _ = encode_tx.send(EncodeCommand::Stop);
     if let Err(e) = encode_handle.join() {
         warn!("Encode thread panicked: {e:?}");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // -----------------------------------------------------------------------
+    // QualityController tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn quality_controller_starts_at_default() {
+        let qc = QualityController::new();
+        assert_eq!(qc.qp(), QP_DEFAULT);
+    }
+
+    #[test]
+    fn quality_controller_reset_restores_default() {
+        let mut qc = QualityController::new();
+        qc.set_buffer_health(5.0);
+        qc.decide(0.033); // force a change
+        qc.reset();
+        assert_eq!(qc.qp(), QP_DEFAULT);
+        assert!(qc.buffer_health_secs.is_none());
+    }
+
+    #[test]
+    fn buffer_overloaded_raises_qp() {
+        let mut qc = QualityController::new();
+        qc.set_buffer_health(3.5); // > 3.0, severely overloaded
+        let result = qc.decide(0.033);
+        assert!(result.is_some());
+        assert!(qc.qp() > QP_DEFAULT);
+    }
+
+    #[test]
+    fn buffer_moderately_overloaded_raises_qp_by_one() {
+        let mut qc = QualityController::new();
+        qc.set_buffer_health(2.5); // > 2.0 but < 3.0
+        let result = qc.decide(0.033);
+        assert_eq!(result, Some(QP_DEFAULT + 1));
+    }
+
+    #[test]
+    fn buffer_healthy_lowers_qp() {
+        let mut qc = QualityController::new();
+        // Start at a QP above minimum so there's room to decrease
+        qc.current_qp = 30;
+        qc.set_buffer_health(0.3); // < 0.5, headroom available
+        let result = qc.decide(0.033);
+        assert_eq!(result, Some(29));
+    }
+
+    #[test]
+    fn buffer_at_minimum_qp_cannot_decrease() {
+        let mut qc = QualityController::new();
+        qc.current_qp = QP_MIN;
+        qc.set_buffer_health(0.3);
+        let result = qc.decide(0.033);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn pipeline_saturated_raises_qp() {
+        let mut qc = QualityController::new();
+        // Simulate slow encoding: avg time is 90% of frame budget
+        qc.encode_time_avg = 0.030; // 30ms
+        let result = qc.decide(0.033); // 33ms budget (30fps) → ratio ~0.9
+        assert!(result.is_some());
+        assert!(qc.qp() > QP_DEFAULT);
+    }
+
+    #[test]
+    fn pipeline_fast_lowers_qp() {
+        let mut qc = QualityController::new();
+        qc.current_qp = 30;
+        // Simulate fast encoding: avg time is 20% of frame budget
+        qc.encode_time_avg = 0.007; // 7ms
+        let result = qc.decide(0.033); // ratio ~0.21
+        assert_eq!(result, Some(29));
+    }
+
+    #[test]
+    fn buffer_health_wins_over_pipeline() {
+        let mut qc = QualityController::new();
+        qc.current_qp = 30;
+        // Buffer says: overloaded (raise QP)
+        qc.set_buffer_health(3.5);
+        // Pipeline says: fast (lower QP)
+        qc.encode_time_avg = 0.005;
+        let result = qc.decide(0.033);
+        // Buffer should win
+        assert!(result.is_some());
+        assert!(qc.qp() > 30);
+    }
+
+    #[test]
+    fn neutral_buffer_defers_to_pipeline() {
+        let mut qc = QualityController::new();
+        qc.current_qp = 30;
+        // Buffer is neutral (between 0.5 and 2.0)
+        qc.set_buffer_health(1.0);
+        // Pipeline says: fast
+        qc.encode_time_avg = 0.005;
+        let result = qc.decide(0.033);
+        // Pipeline signal should take effect
+        assert_eq!(result, Some(29));
+    }
+
+    #[test]
+    fn no_signals_returns_none() {
+        let mut qc = QualityController::new();
+        // No buffer health, no encode time, infinite frame budget
+        let result = qc.decide(10.0); // budget > 1.0 → pipeline signal skipped
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn qp_clamped_at_max() {
+        let mut qc = QualityController::new();
+        qc.current_qp = QP_MAX;
+        qc.set_buffer_health(5.0);
+        let result = qc.decide(0.033);
+        assert!(result.is_none()); // already at max
+    }
+
+    #[test]
+    fn buffer_signal_consumed_after_decide() {
+        let mut qc = QualityController::new();
+        qc.set_buffer_health(3.5);
+        qc.decide(0.033);
+        // Second call without new buffer health should not move QP again
+        // (unless pipeline signal triggers)
+        qc.encode_time_avg = 0.0; // pipeline neutral
+        let result = qc.decide(10.0);
+        assert!(result.is_none());
     }
 }

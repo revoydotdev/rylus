@@ -49,6 +49,19 @@ pub struct EncoderOptions {
 
 const TIME_BASE: ffi::AVRational = ffi::AVRational { num: 1, den: 1000 };
 
+/// AVIO buffer size for writing fMP4 output (1 MB).
+const AVIO_BUFFER_SIZE: c_int = 1024 * 1024;
+
+/// Number of frames in the hardware frame pool for GPU-accelerated encoding.
+const HW_FRAME_POOL_SIZE: c_int = 20;
+
+/// GOP (Group of Pictures) size. Lower values = more keyframes = faster seeking
+/// but larger output. 12 is a reasonable default for low-latency streaming.
+const GOP_SIZE: c_int = 12;
+
+/// Maximum B-frames. Set to 0 for lowest latency (no bidirectional prediction).
+const MAX_B_FRAMES: c_int = 0;
+
 /// FFmpeg AVERROR macro: negate errno to get FFmpeg error code.
 #[inline]
 fn averror(e: c_int) -> c_int {
@@ -452,7 +465,7 @@ impl Scalers {
                 (*frames_ctx).sw_format = pix_fmt_sw_out;
                 (*frames_ctx).width = width_out;
                 (*frames_ctx).height = height_out;
-                (*frames_ctx).initial_pool_size = 20;
+                (*frames_ctx).initial_pool_size = HW_FRAME_POOL_SIZE;
                 let ret = ffi::av_hwframe_ctx_init(hw_frames_ref);
                 if ret < 0 {
                     ffi::av_buffer_unref(&mut { hw_frames_ref });
@@ -548,10 +561,15 @@ pub struct VideoEncoder {
     #[allow(clippy::type_complexity)]
     write_data: Box<dyn FnMut(&[u8])>,
     start_time: Instant,
+    /// MSE codec string (e.g. "avc1.4D4028") derived from the opened codec's
+    /// profile and level. Used by the client for addSourceBuffer().
+    codec_string: String,
 }
 
-// SAFETY: VideoEncoder is used from a single thread (the video thread in session.rs).
-unsafe impl Send for VideoEncoder {}
+// VideoEncoder contains raw FFmpeg pointers that are not thread-safe.
+// It must be created and used on a single thread (the encode thread in session.rs).
+// We intentionally do NOT implement Send — the encoder is created inside the
+// encode thread function, never moved across threads.
 
 impl VideoEncoder {
     pub fn new(
@@ -586,10 +604,17 @@ impl VideoEncoder {
             height_out,
             write_data: Box::new(move |data| write_data(data)),
             start_time: Instant::now(),
+            codec_string: String::new(),
         });
 
         encoder.open_video(options)?;
         Ok(encoder)
+    }
+
+    /// Returns the MSE codec string for this encoder (e.g. "avc1.4D0028").
+    /// Used by the client to call addSourceBuffer with the correct codec.
+    pub fn codec_string(&self) -> &str {
+        &self.codec_string
     }
 
     fn open_video(&mut self, options: EncoderOptions) -> Result<(), EncodeError> {
@@ -647,7 +672,7 @@ impl VideoEncoder {
             }
 
             // Custom AVIO context
-            let buf_size: c_int = 1024 * 1024;
+            let buf_size: c_int = AVIO_BUFFER_SIZE;
             let avio_buf = ffi::av_malloc(buf_size as usize) as *mut u8;
             if avio_buf.is_null() {
                 return Err(enc_err!("Failed to allocate AVIO buffer"));
@@ -690,9 +715,23 @@ impl VideoEncoder {
 
             let codec_name = CStr::from_ptr((*(*self.codec_ctx).codec).name).to_string_lossy();
             let pix_fmt = pix_fmt_name((*self.codec_ctx).pix_fmt);
+
+            // Build the MSE codec string from the actual profile and level.
+            // Format: avc1.PPCCLL where PP=profile_idc, CC=constraint_flags, LL=level_idc.
+            // We read profile and level from the codec context after open.
+            let profile = (*self.codec_ctx).profile;
+            let level = (*self.codec_ctx).level;
+            self.codec_string = if profile >= 0 && level >= 0 {
+                // Profile maps: 66=Baseline, 77=Main, 88=Extended, 100=High
+                // Constraint flags: use 0x00 (no constraints specified)
+                format!("avc1.{:02X}00{:02X}", profile, level)
+            } else {
+                // Fallback: Main Profile Level 4.0 (widely supported)
+                "avc1.4D0028".to_string()
+            };
             info!(
-                "Video: {}x{}@{} pix_fmt: {}",
-                self.width_out, self.height_out, codec_name, pix_fmt
+                "Video: {}x{}@{} pix_fmt: {} codec_string: {}",
+                self.width_out, self.height_out, codec_name, pix_fmt, self.codec_string
             );
 
             Ok(())
@@ -707,8 +746,8 @@ impl VideoEncoder {
             (*c).height = self.height_out as c_int;
             (*c).time_base = TIME_BASE;
             (*c).framerate = ffi::AVRational { num: 0, den: 1 };
-            (*c).gop_size = 12;
-            (*c).max_b_frames = 0;
+            (*c).gop_size = GOP_SIZE;
+            (*c).max_b_frames = MAX_B_FRAMES;
             if (*(*self.format_ctx).oformat).flags & ffi::AVFMT_GLOBALHEADER != 0 {
                 (*c).flags |= ffi::AV_CODEC_FLAG_GLOBAL_HEADER as c_int;
             }
@@ -717,11 +756,84 @@ impl VideoEncoder {
 
     // ---- Hardware encoder setup methods ----
 
+    /// Common hardware/software codec setup: find codec, alloc context, create scalers,
+    /// apply codec-specific options, open, and handle cleanup on failure.
+    ///
+    /// Returns true if the codec was successfully opened. On failure, all allocated
+    /// resources are freed and false is returned.
+    ///
+    /// SAFETY: Caller must ensure `self` fields are in a valid state. This function
+    /// manages FFmpeg resource lifetimes: codec_ctx, scalers, and (optionally) hw_device_ctx.
+    unsafe fn try_codec(
+        &mut self,
+        codec_name: &CStr,
+        hw_pix_fmt: AVPixelFormat,
+        sw_pix_fmt: AVPixelFormat,
+        ctx_pix_fmt: AVPixelFormat,
+        uses_hw_device: bool,
+        set_options: impl FnOnce(*mut ffi::AVCodecContext),
+    ) -> bool {
+        let codec = ffi::avcodec_find_encoder_by_name(codec_name.as_ptr());
+        if codec.is_null() {
+            debug!("Codec {:?} not found", codec_name);
+            if uses_hw_device {
+                ffi::av_buffer_unref(&mut self.hw_device_ctx);
+            }
+            return false;
+        }
+
+        let c = ffi::avcodec_alloc_context3(codec);
+        if c.is_null() {
+            debug!("Could not allocate codec context for {:?}", codec_name);
+            if uses_hw_device {
+                ffi::av_buffer_unref(&mut self.hw_device_ctx);
+            }
+            return false;
+        }
+
+        match Scalers::new(
+            self.width_in as i32,
+            self.height_in as i32,
+            self.width_out as i32,
+            self.height_out as i32,
+            hw_pix_fmt,
+            sw_pix_fmt,
+            self.hw_device_ctx,
+        ) {
+            Ok(s) => {
+                (*c).pix_fmt = ctx_pix_fmt;
+                if uses_hw_device && !s.hw_frames_ctx.is_null() {
+                    (*c).hw_frames_ctx = ffi::av_buffer_ref(s.hw_frames_ctx);
+                }
+                set_options(c);
+                self.set_codec_params(c);
+
+                let ret = ffi::avcodec_open2(c, codec, ptr::null_mut());
+                if ret == 0 {
+                    self.codec_ctx = c;
+                    self.scalers = Some(s);
+                    return true;
+                }
+                debug!("Could not open {:?} codec", codec_name);
+                ffi::avcodec_free_context(&mut { c });
+                if uses_hw_device {
+                    ffi::av_buffer_unref(&mut self.hw_device_ctx);
+                }
+            }
+            Err(e) => {
+                warn!("Failed to initialize scaler for {:?}: {}", codec_name, e);
+                ffi::avcodec_free_context(&mut { c });
+                if uses_hw_device {
+                    ffi::av_buffer_unref(&mut self.hw_device_ctx);
+                }
+            }
+        }
+        false
+    }
+
     #[cfg(target_os = "linux")]
     fn try_vaapi(&mut self) -> bool {
-        // SAFETY: FFmpeg hardware device and codec allocation. All pointers are null-checked
-        // after allocation and freed on error paths. hw_device_ctx is stored in self only on
-        // success.
+        // SAFETY: FFmpeg hardware device allocation + try_codec handles the rest.
         unsafe {
             let vaapi_device = std::env::var("RYLUS_VAAPI_DEVICE").ok();
             let vaapi_device_c = vaapi_device
@@ -740,82 +852,31 @@ impl VideoEncoder {
                 return false;
             }
 
-            let codec = ffi::avcodec_find_encoder_by_name(c"h264_vaapi".as_ptr());
-            if codec.is_null() {
-                ffi::av_buffer_unref(&mut self.hw_device_ctx);
-                return false;
-            }
-
-            let c = ffi::avcodec_alloc_context3(codec);
-            if c.is_null() {
-                ffi::av_buffer_unref(&mut self.hw_device_ctx);
-                return false;
-            }
-
-            match Scalers::new(
-                self.width_in as i32,
-                self.height_in as i32,
-                self.width_out as i32,
-                self.height_out as i32,
+            self.try_codec(
+                c"h264_vaapi",
                 AVPixelFormat::AV_PIX_FMT_VAAPI,
                 AVPixelFormat::AV_PIX_FMT_NV12,
-                self.hw_device_ctx,
-            ) {
-                Ok(s) => {
-                    (*c).pix_fmt = AVPixelFormat::AV_PIX_FMT_VAAPI;
-                    (*c).hw_frames_ctx = ffi::av_buffer_ref(s.hw_frames_ctx);
+                AVPixelFormat::AV_PIX_FMT_VAAPI,
+                true,
+                |c| {
                     ffi::av_opt_set((*c).priv_data, c"quality".as_ptr(), c"7".as_ptr(), 0);
                     ffi::av_opt_set((*c).priv_data, c"qp".as_ptr(), c"23".as_ptr(), 0);
-                    self.set_codec_params(c);
-
-                    let ret = ffi::avcodec_open2(c, codec, ptr::null_mut());
-                    if ret == 0 {
-                        self.codec_ctx = c;
-                        self.scalers = Some(s);
-                        return true;
-                    }
-                    debug!("Could not open VAAPI codec");
-                    ffi::avcodec_free_context(&mut { c });
-                    ffi::av_buffer_unref(&mut self.hw_device_ctx);
-                }
-                Err(e) => {
-                    warn!("Failed to initialize VAAPI scaler: {}", e);
-                    ffi::avcodec_free_context(&mut { c });
-                    ffi::av_buffer_unref(&mut self.hw_device_ctx);
-                }
-            }
-            false
+                },
+            )
         }
     }
 
     #[cfg(target_os = "windows")]
     fn try_mediafoundation(&mut self) -> bool {
-        // SAFETY: FFmpeg codec allocation for MediaFoundation encoder. All pointers are
-        // null-checked after allocation and freed on error paths.
+        // SAFETY: try_codec handles all FFmpeg resource management.
         unsafe {
-            let codec = ffi::avcodec_find_encoder_by_name(c"h264_mf".as_ptr());
-            if codec.is_null() {
-                debug!("Codec 'h264_mf' not found!");
-                return false;
-            }
-
-            let c = ffi::avcodec_alloc_context3(codec);
-            if c.is_null() {
-                debug!("Could not allocate video codec context for 'h264_mf'!");
-                return false;
-            }
-
-            match Scalers::new(
-                self.width_in as i32,
-                self.height_in as i32,
-                self.width_out as i32,
-                self.height_out as i32,
+            self.try_codec(
+                c"h264_mf",
                 AVPixelFormat::AV_PIX_FMT_NV12,
                 AVPixelFormat::AV_PIX_FMT_NV12,
-                ptr::null_mut(),
-            ) {
-                Ok(s) => {
-                    (*c).pix_fmt = AVPixelFormat::AV_PIX_FMT_NV12;
+                AVPixelFormat::AV_PIX_FMT_NV12,
+                false,
+                |c| {
                     ffi::av_opt_set(
                         (*c).priv_data,
                         c"rate_control".as_ptr(),
@@ -829,30 +890,14 @@ impl VideoEncoder {
                         0,
                     );
                     ffi::av_opt_set((*c).priv_data, c"quality".as_ptr(), c"100".as_ptr(), 0);
-                    self.set_codec_params(c);
-
-                    let ret = ffi::avcodec_open2(c, codec, ptr::null_mut());
-                    if ret == 0 {
-                        self.codec_ctx = c;
-                        self.scalers = Some(s);
-                        return true;
-                    }
-                    debug!("Could not open h264_mf codec");
-                    ffi::avcodec_free_context(&mut { c });
-                }
-                Err(e) => {
-                    warn!("Failed to initialize MediaFoundation scaler: {}", e);
-                    ffi::avcodec_free_context(&mut { c });
-                }
-            }
-            false
+                },
+            )
         }
     }
 
     #[cfg(any(target_os = "linux", target_os = "windows"))]
     fn try_nvenc(&mut self) -> bool {
-        // SAFETY: FFmpeg CUDA hardware device and NVENC codec allocation. All pointers are
-        // null-checked after allocation and freed on error paths.
+        // SAFETY: FFmpeg CUDA hardware device allocation + try_codec handles the rest.
         unsafe {
             let ret = ffi::av_hwdevice_ctx_create(
                 &mut self.hw_device_ctx,
@@ -865,107 +910,44 @@ impl VideoEncoder {
                 return false;
             }
 
-            let codec = ffi::avcodec_find_encoder_by_name(c"h264_nvenc".as_ptr());
-            if codec.is_null() {
-                debug!("Codec 'h264_nvenc' not found!");
-                ffi::av_buffer_unref(&mut self.hw_device_ctx);
-                return false;
-            }
-
-            let c = ffi::avcodec_alloc_context3(codec);
-            if c.is_null() {
-                debug!("Could not allocate video codec context for 'h264_nvenc'!");
-                ffi::av_buffer_unref(&mut self.hw_device_ctx);
-                return false;
-            }
-
-            match Scalers::new(
-                self.width_in as i32,
-                self.height_in as i32,
-                self.width_out as i32,
-                self.height_out as i32,
+            self.try_codec(
+                c"h264_nvenc",
                 AVPixelFormat::AV_PIX_FMT_CUDA,
                 AVPixelFormat::AV_PIX_FMT_BGR0,
-                self.hw_device_ctx,
-            ) {
-                Ok(s) => {
-                    (*c).pix_fmt = AVPixelFormat::AV_PIX_FMT_CUDA;
-                    (*c).hw_frames_ctx = ffi::av_buffer_ref(s.hw_frames_ctx);
+                AVPixelFormat::AV_PIX_FMT_CUDA,
+                true,
+                |c| {
                     ffi::av_opt_set((*c).priv_data, c"preset".as_ptr(), c"p1".as_ptr(), 0);
                     ffi::av_opt_set((*c).priv_data, c"zerolatency".as_ptr(), c"1".as_ptr(), 0);
                     ffi::av_opt_set((*c).priv_data, c"tune".as_ptr(), c"ull".as_ptr(), 0);
                     ffi::av_opt_set((*c).priv_data, c"rc".as_ptr(), c"cbr".as_ptr(), 0);
                     ffi::av_opt_set((*c).priv_data, c"cq".as_ptr(), c"21".as_ptr(), 0);
                     ffi::av_opt_set((*c).priv_data, c"delay".as_ptr(), c"0".as_ptr(), 0);
-                    self.set_codec_params(c);
-
-                    let ret = ffi::avcodec_open2(c, codec, ptr::null_mut());
-                    if ret == 0 {
-                        self.codec_ctx = c;
-                        self.scalers = Some(s);
-                        return true;
-                    }
-                    debug!("Could not open h264_nvenc codec");
-                    ffi::avcodec_free_context(&mut { c });
-                    ffi::av_buffer_unref(&mut self.hw_device_ctx);
-                }
-                Err(e) => {
-                    warn!("Failed to initialize NVENC scaler: {}", e);
-                    ffi::avcodec_free_context(&mut { c });
-                    ffi::av_buffer_unref(&mut self.hw_device_ctx);
-                }
-            }
-            false
+                },
+            )
         }
     }
 
     #[cfg(target_os = "macos")]
     fn try_videotoolbox(&mut self) -> bool {
-        // SAFETY: FFmpeg codec allocation for VideoToolbox encoder. All pointers are
-        // null-checked after allocation and freed on error paths.
+        // SAFETY: try_codec handles all FFmpeg resource management.
+        // NOTE: Using "main" profile instead of "extended" — Extended Profile has
+        // zero MSE/Media Source Extensions support in any browser. Main Profile is
+        // universally supported and produces valid fMP4 for the web client.
         unsafe {
-            let codec = ffi::avcodec_find_encoder_by_name(c"h264_videotoolbox".as_ptr());
-            if codec.is_null() {
-                return false;
-            }
-
-            let c = ffi::avcodec_alloc_context3(codec);
-            if c.is_null() {
-                return false;
-            }
-
-            match Scalers::new(
-                self.width_in as i32,
-                self.height_in as i32,
-                self.width_out as i32,
-                self.height_out as i32,
+            self.try_codec(
+                c"h264_videotoolbox",
                 AVPixelFormat::AV_PIX_FMT_YUV420P,
                 AVPixelFormat::AV_PIX_FMT_YUV420P,
-                self.hw_device_ctx,
-            ) {
-                Ok(s) => {
-                    (*c).pix_fmt = AVPixelFormat::AV_PIX_FMT_YUV420P;
+                AVPixelFormat::AV_PIX_FMT_YUV420P,
+                false,
+                |c| {
                     ffi::av_opt_set((*c).priv_data, c"realtime".as_ptr(), c"true".as_ptr(), 0);
                     ffi::av_opt_set((*c).priv_data, c"allow_sw".as_ptr(), c"true".as_ptr(), 0);
-                    ffi::av_opt_set((*c).priv_data, c"profile".as_ptr(), c"extended".as_ptr(), 0);
+                    ffi::av_opt_set((*c).priv_data, c"profile".as_ptr(), c"main".as_ptr(), 0);
                     ffi::av_opt_set((*c).priv_data, c"level".as_ptr(), c"5.2".as_ptr(), 0);
-                    self.set_codec_params(c);
-
-                    let ret = ffi::avcodec_open2(c, codec, ptr::null_mut());
-                    if ret == 0 {
-                        self.codec_ctx = c;
-                        self.scalers = Some(s);
-                        return true;
-                    }
-                    debug!("Could not open h264_videotoolbox codec");
-                    ffi::avcodec_free_context(&mut { c });
-                }
-                Err(e) => {
-                    warn!("Failed to initialize VideoToolbox scaler: {}", e);
-                    ffi::avcodec_free_context(&mut { c });
-                }
-            }
-            false
+                },
+            )
         }
     }
 
@@ -1244,5 +1226,260 @@ pub fn init_ffmpeg_logger() {
     // SAFETY: av_log_set_level is safe to call at any time; it only sets a global integer.
     unsafe {
         ffi::av_log_set_level(ffi::AV_LOG_WARNING);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rylus_core::pixel::PixelProvider;
+
+    fn default_options() -> EncoderOptions {
+        EncoderOptions {
+            try_vaapi: false,
+            try_nvenc: false,
+            try_videotoolbox: false,
+            try_mediafoundation: false,
+        }
+    }
+
+    /// Generate a test BGR0 frame (blue channel only).
+    fn make_bgr0_frame(width: usize, height: usize) -> Vec<u8> {
+        let mut buf = vec![0u8; width * height * 4];
+        for pixel in buf.chunks_exact_mut(4) {
+            pixel[0] = 128; // B
+            pixel[1] = 64; // G
+            pixel[2] = 32; // R
+            pixel[3] = 255; // padding
+        }
+        buf
+    }
+
+    #[test]
+    fn encoder_rejects_zero_dimensions() {
+        let output = Vec::new();
+        let output = std::sync::Mutex::new(output);
+        let result = VideoEncoder::new(
+            0,
+            0,
+            0,
+            0,
+            move |data| {
+                output.lock().unwrap().extend_from_slice(data);
+            },
+            default_options(),
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn encoder_rejects_one_pixel() {
+        let output = std::sync::Mutex::new(Vec::new());
+        let result = VideoEncoder::new(
+            1,
+            1,
+            1,
+            1,
+            move |data| {
+                output.lock().unwrap().extend_from_slice(data);
+            },
+            default_options(),
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn encoder_creates_with_libx264() {
+        init_ffmpeg_logger();
+        let output = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let out = output.clone();
+        let result = VideoEncoder::new(
+            64,
+            64,
+            64,
+            64,
+            move |data| {
+                out.lock().unwrap().extend_from_slice(data);
+            },
+            default_options(),
+        );
+        assert!(
+            result.is_ok(),
+            "libx264 encoder should initialize for 64x64"
+        );
+        let enc = result.unwrap();
+        // Should have a valid codec string
+        assert!(!enc.codec_string().is_empty());
+        assert!(enc.codec_string().starts_with("avc1."));
+    }
+
+    #[test]
+    fn encoder_produces_fmp4_output() {
+        init_ffmpeg_logger();
+        let output = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let out = output.clone();
+        let mut enc = VideoEncoder::new(
+            64,
+            64,
+            64,
+            64,
+            move |data| {
+                out.lock().unwrap().extend_from_slice(data);
+            },
+            default_options(),
+        )
+        .expect("encoder should init");
+
+        // Encode a test frame
+        let frame = make_bgr0_frame(64, 64);
+        enc.encode(PixelProvider::BGR0(64, 64, &frame));
+
+        // Should have produced some output
+        let data = output.lock().unwrap();
+        assert!(
+            !data.is_empty(),
+            "encoding a frame should produce fMP4 output"
+        );
+        // fMP4 starts with an ftyp box
+        assert!(data.len() >= 8, "output should be at least 8 bytes");
+    }
+
+    #[test]
+    fn encoder_handles_odd_dimensions() {
+        // Odd dimensions should be rounded down to even
+        init_ffmpeg_logger();
+        let output = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let out = output.clone();
+        let result = VideoEncoder::new(
+            65,
+            65,
+            65,
+            65,
+            move |data| {
+                out.lock().unwrap().extend_from_slice(data);
+            },
+            default_options(),
+        );
+        assert!(result.is_ok(), "odd dimensions should be rounded to even");
+    }
+
+    #[test]
+    fn encoder_set_quality_doesnt_crash() {
+        init_ffmpeg_logger();
+        let output = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let out = output.clone();
+        let mut enc = VideoEncoder::new(
+            64,
+            64,
+            64,
+            64,
+            move |data| {
+                out.lock().unwrap().extend_from_slice(data);
+            },
+            default_options(),
+        )
+        .expect("encoder should init");
+
+        // Set quality to various values
+        enc.set_quality(0);
+        enc.set_quality(23);
+        enc.set_quality(51);
+        enc.set_quality(100); // should clamp to 51
+    }
+
+    #[test]
+    fn encoder_check_size() {
+        init_ffmpeg_logger();
+        let output = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let out = output.clone();
+        let enc = VideoEncoder::new(
+            640,
+            480,
+            320,
+            240,
+            move |data| {
+                out.lock().unwrap().extend_from_slice(data);
+            },
+            default_options(),
+        )
+        .expect("encoder should init");
+
+        assert!(enc.check_size(640, 480, 320, 240));
+        assert!(!enc.check_size(640, 480, 320, 241));
+        assert!(!enc.check_size(641, 480, 320, 240));
+    }
+
+    #[test]
+    fn encoder_drop_cleans_up() {
+        init_ffmpeg_logger();
+        let output = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let out = output.clone();
+        let enc = VideoEncoder::new(
+            64,
+            64,
+            64,
+            64,
+            move |data| {
+                out.lock().unwrap().extend_from_slice(data);
+            },
+            default_options(),
+        )
+        .expect("encoder should init");
+
+        // Drop should not panic or leak
+        drop(enc);
+    }
+
+    #[test]
+    fn encoder_multiple_frames() {
+        init_ffmpeg_logger();
+        let output = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let out = output.clone();
+        let mut enc = VideoEncoder::new(
+            64,
+            64,
+            64,
+            64,
+            move |data| {
+                out.lock().unwrap().extend_from_slice(data);
+            },
+            default_options(),
+        )
+        .expect("encoder should init");
+
+        let frame = make_bgr0_frame(64, 64);
+        for _ in 0..5 {
+            enc.encode(PixelProvider::BGR0(64, 64, &frame));
+        }
+
+        let data = output.lock().unwrap();
+        assert!(
+            data.len() > 100,
+            "5 frames should produce substantial output"
+        );
+    }
+
+    #[test]
+    fn buffer_validation_wrong_size_doesnt_crash() {
+        init_ffmpeg_logger();
+        let output = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let out = output.clone();
+        let mut enc = VideoEncoder::new(
+            64,
+            64,
+            64,
+            64,
+            move |data| {
+                out.lock().unwrap().extend_from_slice(data);
+            },
+            default_options(),
+        )
+        .expect("encoder should init");
+
+        // Pass a buffer that's too small — this should not segfault
+        // (the bounds check in encode() should catch it)
+        let small_buf = vec![0u8; 10];
+        enc.encode(PixelProvider::BGR0(64, 64, &small_buf));
+        // If we got here without a crash, the bounds check worked
     }
 }
