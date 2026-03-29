@@ -3,7 +3,7 @@ ENV RUSTUP_HOME="/usr/local/rustup" CARGO_HOME="/usr/local/cargo" PATH="/usr/loc
 
 RUN apk add --no-cache \
     autoconf libtool pkgconfig libdrm-dev pipewire-dev dbus-libs \
-    dbus-dev cmake build-base nasm npm ffmpeg-dev libva-dev curl git bash automake tar clang \
+    dbus-dev cmake build-base nasm npm ffmpeg-dev libva-dev curl git bash automake tar clang clang-dev \
     wayland-dev libxkbcommon-dev
 
 RUN npm install --global esbuild
