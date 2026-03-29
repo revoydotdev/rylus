@@ -274,21 +274,19 @@ impl UInputDevice {
     }
 
     fn transform_x(&self, x: f64) -> i32 {
-        let x = (x * self.geometry.w + self.geometry.x) * ABS_MAX;
-        x as i32
+        compute_transform_x(x, self.geometry.x, self.geometry.w)
     }
 
     fn transform_y(&self, y: f64) -> i32 {
-        let y = (y * self.geometry.h + self.geometry.y) * ABS_MAX;
-        y as i32
+        compute_transform_y(y, self.geometry.y, self.geometry.h)
     }
 
     fn transform_pressure(&self, p: f64) -> i32 {
-        (p * ABS_MAX) as i32
+        compute_transform_pressure(p)
     }
 
     fn transform_touch_size(&self, s: f64) -> i32 {
-        (s * ABS_MAX) as i32
+        compute_transform_touch_size(s)
     }
 
     fn find_slot(&self, id: i64) -> Option<usize> {
@@ -964,5 +962,195 @@ impl InputDevice for UInputDevice {
 
     fn device_type(&self) -> InputDeviceType {
         InputDeviceType::UInputDevice
+    }
+}
+
+// Pure math helpers extracted for testability.
+
+fn compute_transform_x(x: f64, geom_x: f64, geom_w: f64) -> i32 {
+    ((x * geom_w + geom_x) * ABS_MAX) as i32
+}
+
+fn compute_transform_y(y: f64, geom_y: f64, geom_h: f64) -> i32 {
+    ((y * geom_h + geom_y) * ABS_MAX) as i32
+}
+
+fn compute_transform_pressure(p: f64) -> i32 {
+    (p * ABS_MAX) as i32
+}
+
+fn compute_transform_touch_size(s: f64) -> i32 {
+    (s * ABS_MAX) as i32
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::{Error as IoError, ErrorKind};
+
+    // ── Coordinate transforms ───────────────────────────────────────
+
+    #[test]
+    fn transform_x_mid_default_geometry() {
+        // Default geometry: x=0.0, w=1.0
+        // 0.5 * 1.0 + 0.0 = 0.5  =>  0.5 * 65535.0 = 32767.5 => 32767
+        assert_eq!(compute_transform_x(0.5, 0.0, 1.0), 32767);
+    }
+
+    #[test]
+    fn transform_x_boundaries() {
+        assert_eq!(compute_transform_x(0.0, 0.0, 1.0), 0);
+        assert_eq!(compute_transform_x(1.0, 0.0, 1.0), 65535);
+    }
+
+    #[test]
+    fn transform_y_mid_default_geometry() {
+        assert_eq!(compute_transform_y(0.5, 0.0, 1.0), 32767);
+    }
+
+    #[test]
+    fn transform_y_boundaries() {
+        assert_eq!(compute_transform_y(0.0, 0.0, 1.0), 0);
+        assert_eq!(compute_transform_y(1.0, 0.0, 1.0), 65535);
+    }
+
+    #[test]
+    fn transform_x_with_geometry_offset() {
+        // geometry: x=0.25, w=0.5  (captures right-center quarter of screen)
+        // input 0.0 => (0.0 * 0.5 + 0.25) * 65535 = 16383.75 => 16383
+        assert_eq!(compute_transform_x(0.0, 0.25, 0.5), 16383);
+        // input 1.0 => (1.0 * 0.5 + 0.25) * 65535 = 49151.25 => 49151
+        assert_eq!(compute_transform_x(1.0, 0.25, 0.5), 49151);
+        // input 0.5 => (0.5 * 0.5 + 0.25) * 65535 = 32767.5 => 32767
+        assert_eq!(compute_transform_x(0.5, 0.25, 0.5), 32767);
+    }
+
+    #[test]
+    fn transform_y_with_geometry_offset() {
+        // geometry: y=0.1, h=0.8
+        // input 0.0 => (0.0 * 0.8 + 0.1) * 65535 = 6553.5 => 6553
+        assert_eq!(compute_transform_y(0.0, 0.1, 0.8), 6553);
+        // input 1.0 => (1.0 * 0.8 + 0.1) * 65535 = 58981.5 => 58981
+        assert_eq!(compute_transform_y(1.0, 0.1, 0.8), 58981);
+    }
+
+    // ── Pressure transform ──────────────────────────────────────────
+
+    #[test]
+    fn transform_pressure_zero() {
+        assert_eq!(compute_transform_pressure(0.0), 0);
+    }
+
+    #[test]
+    fn transform_pressure_max() {
+        assert_eq!(compute_transform_pressure(1.0), 65535);
+    }
+
+    #[test]
+    fn transform_pressure_half() {
+        // 0.5 * 65535.0 = 32767.5 => 32767
+        assert_eq!(compute_transform_pressure(0.5), 32767);
+    }
+
+    // ── Touch size transform ────────────────────────────────────────
+
+    #[test]
+    fn transform_touch_size_boundaries() {
+        assert_eq!(compute_transform_touch_size(0.0), 0);
+        assert_eq!(compute_transform_touch_size(1.0), 65535);
+        assert_eq!(compute_transform_touch_size(0.5), 32767);
+    }
+
+    // ── Multi-touch slot management ─────────────────────────────────
+
+    /// Helper: create a bare touches array for slot tests.
+    fn empty_touches() -> [Option<MultiTouch>; 10] {
+        Default::default()
+    }
+
+    fn find_slot_in(touches: &[Option<MultiTouch>; 10], id: i64) -> Option<usize> {
+        touches.iter().enumerate().find_map(|(slot, mt)| match mt {
+            Some(mt) if mt.id == id => Some(slot),
+            _ => None,
+        })
+    }
+
+    fn allocate_slot(touches: &mut [Option<MultiTouch>; 10], id: i64) -> Option<usize> {
+        if let Some(existing) = find_slot_in(touches, id) {
+            return Some(existing);
+        }
+        let free =
+            touches
+                .iter()
+                .enumerate()
+                .find_map(|(slot, mt)| if mt.is_none() { Some(slot) } else { None });
+        if let Some(slot) = free {
+            touches[slot] = Some(MultiTouch { id });
+        }
+        free
+    }
+
+    #[test]
+    fn slot_allocation_sequential() {
+        let mut touches = empty_touches();
+        assert_eq!(allocate_slot(&mut touches, 100), Some(0));
+        assert_eq!(allocate_slot(&mut touches, 200), Some(1));
+        assert_eq!(allocate_slot(&mut touches, 300), Some(2));
+    }
+
+    #[test]
+    fn slot_find_existing() {
+        let mut touches = empty_touches();
+        allocate_slot(&mut touches, 42);
+        allocate_slot(&mut touches, 99);
+        // Re-requesting an existing id returns same slot
+        assert_eq!(allocate_slot(&mut touches, 42), Some(0));
+        assert_eq!(allocate_slot(&mut touches, 99), Some(1));
+    }
+
+    #[test]
+    fn slot_dealloc_and_reuse() {
+        let mut touches = empty_touches();
+        allocate_slot(&mut touches, 1);
+        allocate_slot(&mut touches, 2);
+        allocate_slot(&mut touches, 3);
+
+        // Free slot 1 (index 1)
+        touches[1] = None;
+        // Next allocation should reuse slot 1
+        assert_eq!(allocate_slot(&mut touches, 99), Some(1));
+    }
+
+    #[test]
+    fn slot_limit_exhaustion() {
+        let mut touches = empty_touches();
+        for i in 0..10 {
+            assert_eq!(allocate_slot(&mut touches, i), Some(i as usize));
+        }
+        // All 10 slots occupied; 11th allocation fails
+        assert_eq!(allocate_slot(&mut touches, 999), None);
+    }
+
+    // ── Error mapping ───────────────────────────────────────────────
+
+    #[test]
+    fn map_io_error_permission_denied() {
+        let err = IoError::new(ErrorKind::PermissionDenied, "test");
+        let cerr = map_io_error(err, "ctx");
+        assert_eq!(cerr.code(), 101);
+    }
+
+    #[test]
+    fn map_io_error_not_found() {
+        let err = IoError::new(ErrorKind::NotFound, "test");
+        let cerr = map_io_error(err, "ctx");
+        assert_eq!(cerr.code(), 101);
+    }
+
+    #[test]
+    fn map_io_error_other() {
+        let err = IoError::new(ErrorKind::BrokenPipe, "test");
+        let cerr = map_io_error(err, "ctx");
+        assert_eq!(cerr.code(), 1);
     }
 }

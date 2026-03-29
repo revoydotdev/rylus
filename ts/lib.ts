@@ -628,9 +628,10 @@ class Painter {
         // only do work if necessary
         // Only render drawing lines when video is disabled — otherwise the video covers the canvas.
         if (!check_video.checked && (this.lines_active.size > 0 || this.lines_old.length > 0)) {
-            if (this.lines_old.length > 0) {
-                if (performance.now() - this.lines_old[0][this.lines_old[0].length - 1] > fade_time)
-                    this.lines_old.shift();
+            while (this.lines_old.length > 0 &&
+                   (performance.now() - this.lines_old[0][this.lines_old[0].length - 1] > fade_time ||
+                    this.lines_old.length > 1000)) {
+                this.lines_old.shift();
             }
             let gl = this.gl;
             gl.viewport(0, 0, this.canvas.width, this.canvas.height);
@@ -951,6 +952,9 @@ function handle_messages(
     let prevObjectURL: string = null;
     let health_frame_count = 0;
     let last_onerror_restart = 0;
+    // Codec string from server's VideoInit message (e.g. "avc1.4D0028").
+    // Falls back to a widely-compatible default if the server doesn't send one.
+    let serverCodecString: string = "avc1.4D0028";
     const ONERROR_DEBOUNCE_MS = 5000;
     const MAX_BUFFER_LENGTH = 20;  // In seconds
     function upd_buf() {
@@ -1004,7 +1008,7 @@ function handle_messages(
                     prevObjectURL = URL.createObjectURL(mediaSource);
                     video.src = prevObjectURL;
                     mediaSource.addEventListener("sourceopen", (_) => {
-                        let mimeType = 'video/mp4; codecs="avc1.4D403D"';
+                        let mimeType = 'video/mp4; codecs="' + serverCodecString + '"';
                         if (!MS.isTypeSupported(mimeType))
                             mimeType = "video/mp4";
                         sourceBuffer = mediaSource.addSourceBuffer(mimeType);
@@ -1024,6 +1028,12 @@ function handle_messages(
             } else if (typeof msg == "object") {
                 if ("Hello" in msg) {
                     log(LogLevel.INFO, "Server protocol version: " + msg["Hello"]["protocol_version"]);
+                } else if ("VideoInit" in msg) {
+                    let vi = msg["VideoInit"];
+                    if (vi && vi.codec_string) {
+                        serverCodecString = vi.codec_string;
+                        log(LogLevel.INFO, "Server codec: " + serverCodecString);
+                    }
                 } else if ("CapturableList" in msg)
                     onCapturableList(msg["CapturableList"]);
                 else if ("Error" in msg)
