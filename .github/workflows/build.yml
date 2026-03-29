@@ -118,6 +118,7 @@ jobs:
       run: |
         docker run --rm -v ${{ github.workspace }}:/build -w /build \
           -e CARGO_HOME=/build/.cargo-docker \
+          -e npm_config_cache=/build/.npm-cache \
           --user "$(id -u):$(id -g)" \
           rylus-alpine-build \
           sh -c "npm install && RUSTFLAGS='-C target-feature=-crt-static' cargo build --release && cd target/release && tar czf rylus-linux-alpine-musl.tar.gz rylus"

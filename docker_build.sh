@@ -11,8 +11,10 @@ cargo build --release
 # build .deb package
 cargo deb --package rylus-server
 
-# check if installing works
-sudo dpkg -i target/debian/rylus*.deb
+# check if installing works (skip on non-Debian systems)
+if command -v dpkg >/dev/null 2>&1; then
+  sudo dpkg -i target/debian/rylus*.deb
+fi
 
 mkdir -p packages
 
