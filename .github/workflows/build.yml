@@ -89,14 +89,14 @@ jobs:
       uses: actions/upload-artifact@v6
       with:
         name: linux-deb
-        path: packages/Rylus*.deb
+        path: packages/rylus*.deb
     - name: Publish
       uses: softprops/action-gh-release@v2
       if: startsWith(github.ref, 'refs/tags/')
       with:
           files: |
             packages/rylus-linux.zip
-            packages/Rylus*.deb
+            packages/rylus*.deb
           prerelease: false
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -152,8 +152,7 @@ jobs:
         cargo install cargo-bundle
       shell: bash
     - name: Build
-      # run: MACOSX_DEPLOYMENT_TARGET=10.13 cargo bundle --release
-      run: cargo bundle --release
+      run: cargo bundle --release --package rylus-server
     - name: Package
       run: |
         MACOS_BUILD_NAME=macos-$([ "${{ matrix.os }}" == "macos-latest" ] && echo "arm" || echo "intel")
@@ -201,6 +200,8 @@ jobs:
       shell: cmd
     - name: Build
       run: cargo build --release
+      env:
+        FFMPEG_DIR: C:\vcpkg\installed\x64-windows-static-md
     - name: Package
       run: |
         cd target/release
