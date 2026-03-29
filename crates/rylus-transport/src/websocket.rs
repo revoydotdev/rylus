@@ -16,6 +16,10 @@ const MAX_TEXT_FRAME_SIZE: usize = 64 * 1024; // 64 KB
 /// Idle timeout: close the connection if no message is received within this duration.
 const IDLE_TIMEOUT: Duration = Duration::from_secs(60);
 
+/// Channel buffer capacity for both inbound and outbound WebSocket messages.
+/// Provides backpressure: senders block when the buffer is full.
+const CHANNEL_BUFFER_SIZE: usize = 32;
+
 pub struct WsRylusReceiver {
     recv: tokio::sync::mpsc::Receiver<MessageInbound>,
 }
@@ -70,10 +74,8 @@ pub fn rylus_websocket_channel(
 
     let mut rx = FragmentCollectorRead::new(rx);
 
-    // Buffer sizes: 32 messages provides backpressure — if the consumer can't keep up,
-    // senders will block (inbound) or await (outbound), preventing unbounded memory growth.
-    let (sender_inbound, receiver_inbound) = channel::<MessageInbound>(32);
-    let (sender_outbound, mut receiver_outbound) = channel::<WsMessage>(32);
+    let (sender_inbound, receiver_inbound) = channel::<MessageInbound>(CHANNEL_BUFFER_SIZE);
+    let (sender_outbound, mut receiver_outbound) = channel::<WsMessage>(CHANNEL_BUFFER_SIZE);
 
     {
         let sender_outbound = sender_outbound.clone();

@@ -11,7 +11,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.16.0"
+version = "0.16.1"
 authors = ["HMH <henry@freedesk.net>"]
 edition = "2021"
 license = "AGPL-3.0-or-later"
@@ -27,6 +27,7 @@ rylus-gui = { path = "crates/rylus-gui" }
 
 # External dependencies
 bitflags = { version = "^2.6", features = ["serde"] }
+parking_lot = "0.12"
 clap = { version = "4.5.18", features = ["derive"] }
 clap_complete = "4.5.29"
 serde = { version = "^1.0", features = ["derive"] }

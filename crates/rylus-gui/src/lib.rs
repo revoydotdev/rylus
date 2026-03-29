@@ -1,5 +1,6 @@
+use parking_lot::Mutex;
 use std::net::{IpAddr, SocketAddr};
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::{mpsc, Arc};
 
 use eframe::egui;
 use tracing::{info, warn};
@@ -139,7 +140,7 @@ impl RylusApp {
             let log_lines = log_lines.clone();
             std::thread::spawn(move || {
                 while let Ok(msg) = log_receiver.recv() {
-                    log_lines.lock().expect("log mutex poisoned").push(msg);
+                    log_lines.lock().push(msg);
                 }
             });
         }
@@ -748,7 +749,7 @@ impl eframe::App for RylusApp {
                 .default_open(self.log_open)
                 .show(ui, |ui| {
                     self.log_open = true;
-                    let log_lines = self.log_lines.lock().expect("log mutex poisoned");
+                    let log_lines = self.log_lines.lock();
 
                     if log_lines.is_empty() {
                         ui.colored_label(

@@ -9,6 +9,7 @@ use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper::{Method, Request, Response, StatusCode};
 use hyper_util::rt::TokioIo;
+use parking_lot::Mutex;
 use rand::Rng;
 use serde::Serialize;
 use std::collections::HashMap;
@@ -16,7 +17,7 @@ use std::convert::Infallible;
 use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::net::TcpListener;
 use tokio::sync::{mpsc, oneshot};
@@ -60,7 +61,7 @@ impl RateLimiter {
 
     /// Returns true if the IP is currently locked out.
     fn is_locked_out(&self, ip: &IpAddr) -> bool {
-        let mut attempts = self.attempts.lock().expect("rate limiter mutex poisoned");
+        let mut attempts = self.attempts.lock();
         let now = Instant::now();
         if let Some(timestamps) = attempts.get_mut(ip) {
             // Remove attempts outside the window
@@ -77,7 +78,7 @@ impl RateLimiter {
 
     /// Record a failed attempt from this IP.
     fn record_failure(&self, ip: &IpAddr) {
-        let mut attempts = self.attempts.lock().expect("rate limiter mutex poisoned");
+        let mut attempts = self.attempts.lock();
         let now = Instant::now();
         let timestamps = attempts.entry(*ip).or_default();
         // Clean old entries
@@ -114,14 +115,14 @@ impl SessionStore {
                 }
             })
             .collect();
-        let mut tokens = self.tokens.lock().expect("session store mutex poisoned");
+        let mut tokens = self.tokens.lock();
         tokens.insert(token.clone(), Instant::now());
         token
     }
 
     /// Check if a token is valid (exists and not expired).
     fn is_valid(&self, token: &str) -> bool {
-        let mut tokens = self.tokens.lock().expect("session store mutex poisoned");
+        let mut tokens = self.tokens.lock();
         if let Some(created) = tokens.get(token) {
             if created.elapsed() < SESSION_TTL {
                 return true;
@@ -655,6 +656,11 @@ pub fn run(
         rate_limiter: RateLimiter::new(),
         session_store: SessionStore::new(),
     };
+    // Architecture note: the web server runs on a dedicated OS thread with its own Tokio
+    // runtime (#[tokio::main] on run_server). This is intentional: egui requires the main
+    // thread for GUI rendering, and the async web server needs its own runtime. The video
+    // pipeline uses std::thread and std::sync::mpsc (no Tokio). This design keeps the GUI
+    // responsive while the web server handles concurrent HTTP/WebSocket connections.
     std::thread::spawn(move || run_server(context, sender_ui, sender_startup, notify_shutdown))
 }
 

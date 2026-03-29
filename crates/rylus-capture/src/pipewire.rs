@@ -1,7 +1,8 @@
+use parking_lot::Mutex;
 use std::collections::HashMap;
 use std::error::Error;
 use std::os::unix::io::{AsRawFd, FromRawFd};
-use std::sync::{Arc, LazyLock, Mutex, Weak};
+use std::sync::{Arc, LazyLock, Weak};
 use std::time::Duration;
 use tracing::{debug, info, trace, warn};
 
@@ -119,7 +120,7 @@ static PORTAL_CACHE: LazyLock<Mutex<Option<Weak<PortalSession>>>> =
 fn acquire_portal_session(capture_cursor: bool) -> Result<Arc<PortalSession>, Box<dyn Error>> {
     // Fast path: try the cache without holding the acquisition lock.
     {
-        let cache = PORTAL_CACHE.lock().unwrap_or_else(|e| e.into_inner());
+        let cache = PORTAL_CACHE.lock();
         if let Some(weak) = cache.as_ref() {
             if let Some(session) = weak.upgrade() {
                 if session.capture_cursor == capture_cursor {
@@ -136,13 +137,11 @@ fn acquire_portal_session(capture_cursor: bool) -> Result<Arc<PortalSession>, Bo
 
     // Slow path: acquire the serialization lock so only one thread talks
     // to the portal at a time.
-    let _guard = PORTAL_ACQUIRE_LOCK
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _guard = PORTAL_ACQUIRE_LOCK.lock();
 
     // Re-check cache: another thread may have acquired while we waited.
     {
-        let cache = PORTAL_CACHE.lock().unwrap_or_else(|e| e.into_inner());
+        let cache = PORTAL_CACHE.lock();
         if let Some(weak) = cache.as_ref() {
             if let Some(session) = weak.upgrade() {
                 if session.capture_cursor == capture_cursor {
@@ -173,7 +172,7 @@ fn acquire_portal_session(capture_cursor: bool) -> Result<Arc<PortalSession>, Bo
 
     // Store a Weak so future callers can reuse this session.
     {
-        let mut cache = PORTAL_CACHE.lock().unwrap_or_else(|e| e.into_inner());
+        let mut cache = PORTAL_CACHE.lock();
         *cache = Some(Arc::downgrade(&session));
     }
 
@@ -358,9 +357,7 @@ impl PipeWireRecorder {
                         | pw::stream::StreamState::Unconnected
                 ) {
                     warn!("PipeWire stream entered terminal state: {:?}", new);
-                    if let Ok(mut state) = shared_for_state.lock() {
-                        state.stream_error = true;
-                    }
+                    shared_for_state.lock().stream_error = true;
                 }
             })
             .param_changed(move |_, user_data, id, param| {
@@ -400,7 +397,8 @@ impl PipeWireRecorder {
                     fmt.framerate().denom,
                 );
 
-                if let Ok(mut state) = shared_for_param.lock() {
+                {
+                    let mut state = shared_for_param.lock();
                     state.video_format = fmt.format();
                     state.width = fmt.size().width as usize;
                     state.height = fmt.size().height as usize;
@@ -491,7 +489,8 @@ impl PipeWireRecorder {
                     return;
                 };
 
-                if let Ok(mut state) = shared_for_process.lock() {
+                {
+                    let mut state = shared_for_process.lock();
                     state.frame = frame_data;
                     state.width = w;
                     state.height = h;
@@ -594,7 +593,7 @@ impl PipeWireRecorder {
             // Iterate the PipeWire main loop for a short time to process events.
             mainloop.loop_().iterate(Duration::from_millis(10));
 
-            let state = shared.lock().unwrap();
+            let state = shared.lock();
             if state.format_valid {
                 debug!("PipeWire format negotiated successfully");
                 break;
@@ -714,7 +713,7 @@ impl Recorder for PipeWireRecorder {
     fn capture(&mut self) -> Result<PixelProvider<'_>, Box<dyn Error>> {
         // Check if the PipeWire stream has entered an error state before iterating.
         {
-            let state = self.shared.lock().unwrap();
+            let state = self.shared.lock();
             if state.stream_error {
                 return Err(Box::new(PipeWireError(
                     "PipeWire stream is in an error state".into(),
@@ -730,7 +729,7 @@ impl Recorder for PipeWireRecorder {
 
         // Check if we got a new frame from the stream callbacks.
         {
-            let mut state = self.shared.lock().unwrap();
+            let mut state = self.shared.lock();
             if state.stream_error {
                 return Err(Box::new(PipeWireError(
                     "PipeWire stream is in an error state".into(),
@@ -845,18 +844,18 @@ where
         match r.response {
             0 => {}
             1 => {
-                context.lock().expect("context mutex poisoned").failure = true;
+                context.lock().failure = true;
                 warn!("DBus response: User cancelled interaction.");
                 return true;
             }
             c => {
-                context.lock().expect("context mutex poisoned").failure = true;
+                context.lock().failure = true;
                 warn!("DBus response: Unknown error, code: {}.", c);
                 return true;
             }
         }
         if let Err(err) = f(r, portal, m, context.clone()) {
-            context.lock().expect("context mutex poisoned").failure = true;
+            context.lock().failure = true;
             warn!("Error requesting screen capture via dbus: {}", err);
         }
         true
@@ -948,12 +947,8 @@ fn on_create_session_response(
         .to_string()
         .into();
 
-    context.lock().expect("context mutex poisoned").session = session.clone();
-    if context
-        .lock()
-        .expect("context mutex poisoned")
-        .has_remote_desktop
-    {
+    context.lock().session = session.clone();
+    if context.lock().has_remote_desktop {
         select_devices(portal, context)
     } else {
         select_sources(portal, context)
@@ -993,14 +988,7 @@ fn select_devices(
         context.clone(),
         |_, portal, _, context| select_sources(portal, context),
     )?;
-    portal.select_devices(
-        context
-            .lock()
-            .expect("context mutex poisoned")
-            .session
-            .clone(),
-        args,
-    )?;
+    portal.select_devices(context.lock().session.clone(), args)?;
     Ok(())
 }
 
@@ -1027,10 +1015,7 @@ fn select_sources(
     debug!("Available source types: {source_types}.");
     args.insert("types".into(), Variant(Box::new(source_types)));
 
-    let capture_cursor = context
-        .lock()
-        .expect("context mutex poisoned")
-        .capture_cursor;
+    let capture_cursor = context.lock().capture_cursor;
     // Cursor modes (bitmask):
     // 1: Hidden — cursor is not part of the screen cast stream.
     // 2: Embedded — cursor is embedded as part of the stream buffers.
@@ -1071,14 +1056,7 @@ fn select_sources(
         context.clone(),
         on_select_sources_response,
     )?;
-    portal.select_sources(
-        context
-            .lock()
-            .expect("context mutex poisoned")
-            .session
-            .clone(),
-        args,
-    )?;
+    portal.select_sources(context.lock().session.clone(), args)?;
     Ok(())
 }
 
@@ -1105,32 +1083,15 @@ fn on_select_sources_response(
         on_start_response,
     )?;
 
-    if context
-        .lock()
-        .expect("context mutex poisoned")
-        .has_remote_desktop
-    {
+    if context.lock().has_remote_desktop {
         OrgFreedesktopPortalRemoteDesktop::start(
             &portal,
-            context
-                .lock()
-                .expect("context mutex poisoned")
-                .session
-                .clone(),
+            context.lock().session.clone(),
             "",
             args,
         )?;
     } else {
-        OrgFreedesktopPortalScreenCast::start(
-            &portal,
-            context
-                .lock()
-                .expect("context mutex poisoned")
-                .session
-                .clone(),
-            "",
-            args,
-        )?;
+        OrgFreedesktopPortalScreenCast::start(&portal, context.lock().session.clone(), "", args)?;
     }
     Ok(())
 }
@@ -1142,7 +1103,7 @@ fn on_start_response(
     context: Arc<Mutex<CallBackContext>>,
 ) -> Result<(), Box<dyn Error>> {
     debug!("on_start_response");
-    let mut context = context.lock().expect("context mutex poisoned");
+    let mut context = context.lock();
     context.streams.append(&mut streams_from_response(&r));
     let session = context.session.clone();
     context
@@ -1212,7 +1173,7 @@ fn request_remote_desktop(capture_cursor: bool) -> PortalSessionResult {
     let timeout_iters = 300; // 300 * 100ms = 30s
     for _ in 0..timeout_iters {
         conn.process(Duration::from_millis(100))?;
-        let context = context.lock().expect("context mutex poisoned");
+        let context = context.lock();
         if context.fd.is_some() {
             break;
         }
@@ -1220,7 +1181,7 @@ fn request_remote_desktop(capture_cursor: bool) -> PortalSessionResult {
             break;
         }
     }
-    let context = context.lock().expect("context mutex poisoned");
+    let context = context.lock();
     if context.failure {
         Err(Box::new(DBusError(
             "Portal request failed: user cancelled or an error occurred during \
