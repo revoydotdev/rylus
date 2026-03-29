@@ -690,14 +690,14 @@ const DMA_BUF_IOCTL_SYNC: libc::c_ulong = 0x4008_6200;
 fn dmabuf_sync_start(fd: i32) {
     let flags: u64 = DMA_BUF_SYNC_READ | DMA_BUF_SYNC_START;
     unsafe {
-        libc::ioctl(fd, DMA_BUF_IOCTL_SYNC, &flags as *const u64);
+        libc::ioctl(fd, DMA_BUF_IOCTL_SYNC as _, &flags as *const u64);
     }
 }
 
 fn dmabuf_sync_end(fd: i32) {
     let flags: u64 = DMA_BUF_SYNC_READ | DMA_BUF_SYNC_END;
     unsafe {
-        libc::ioctl(fd, DMA_BUF_IOCTL_SYNC, &flags as *const u64);
+        libc::ioctl(fd, DMA_BUF_IOCTL_SYNC as _, &flags as *const u64);
     }
 }
 
