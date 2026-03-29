@@ -116,7 +116,10 @@ jobs:
       run: docker build -t rylus-alpine-build -f docker/Dockerfile_alpine .
     - name: Build in container
       run: |
-        docker run --rm -v ${{ github.workspace }}:/build -w /build rylus-alpine-build \
+        docker run --rm -v ${{ github.workspace }}:/build -w /build \
+          -e CARGO_HOME=/build/.cargo-docker \
+          --user "$(id -u):$(id -g)" \
+          rylus-alpine-build \
           sh -c "npm install && RUSTFLAGS='-C target-feature=-crt-static' cargo build --release && cd target/release && tar czf rylus-linux-alpine-musl.tar.gz rylus"
     - name: Artifacts1
       uses: actions/upload-artifact@v6
