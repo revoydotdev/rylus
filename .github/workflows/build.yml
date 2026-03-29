@@ -47,12 +47,27 @@ jobs:
     - name: Audit
       run: cargo audit
 
-  build-docker:
+  build-linux:
     needs: quality
     runs-on: ubuntu-latest
-    container: docker://hhmhh/weylus_build:latest
     steps:
     - uses: actions/checkout@v6
+    - name: Install system dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          libgl1-mesa-dev libglu1-mesa-dev cmake git curl zip \
+          libssl-dev gcc g++ autoconf libtool-bin pkg-config clang nasm \
+          libpipewire-0.3-dev libdbus-1-dev \
+          libavcodec-dev libavformat-dev libavfilter-dev libavutil-dev \
+          libswscale-dev libswresample-dev \
+          libwayland-dev libxkbcommon-dev \
+          libdrm-dev libva-dev \
+          libx11-dev libxext-dev libxrandr-dev libxfixes-dev libxi-dev libxcomposite-dev
+    - uses: actions/setup-node@v4
+      with:
+        node-version: 22
+    - uses: dtolnay/rust-toolchain@stable
     - uses: actions/cache@v5
       with:
         path: |
@@ -60,8 +75,8 @@ jobs:
           ~/.cargo/git
           target
         key: ${{ runner.os }}-cargo-${{ hashFiles('Cargo.lock') }}
-    - name: Install PipeWire dev libraries
-      run: apt-get update && apt-get install -y libpipewire-0.3-dev
+    - name: Install cargo-deb
+      run: cargo install cargo-deb
     - name: Build
       run: ./docker_build.sh
       shell: bash
@@ -86,26 +101,17 @@ jobs:
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  build-docker-alpine:
+  build-linux-alpine:
     needs: quality
     runs-on: ubuntu-latest
-    container: docker://hhmhh/weylus_build_alpine:latest
     steps:
     - uses: actions/checkout@v6
-    - uses: actions/cache@v5
-      with:
-        path: |
-          ~/.cargo/registry
-          ~/.cargo/git
-          target
-        key: ${{ runner.os }}-alpine-cargo-${{ hashFiles('Cargo.lock') }}
-    - name: Install PipeWire dev libraries
-      run: apk add --no-cache pipewire-dev
-    - name: Install JS deps
-      run: npm install
-    - name: Build
-      run: RUSTFLAGS='-C target-feature=-crt-static' cargo build --release && cd target/release && tar czf rylus-linux-alpine-musl.tar.gz rylus
-      shell: bash
+    - name: Build Alpine container
+      run: docker build -t rylus-alpine-build -f docker/Dockerfile_alpine .
+    - name: Build in container
+      run: |
+        docker run --rm -v ${{ github.workspace }}:/build -w /build rylus-alpine-build \
+          sh -c "npm install && RUSTFLAGS='-C target-feature=-crt-static' cargo build --release && cd target/release && tar czf rylus-linux-alpine-musl.tar.gz rylus"
     - name: Artifacts1
       uses: actions/upload-artifact@v6
       with:
@@ -163,7 +169,54 @@ jobs:
       if: startsWith(github.ref, 'refs/tags/')
       with:
           files: |
-            target/release/bundle/osx/macOS.zip
+            target/release/bundle/osx/${{ env.MACOS_BUILD_NAME }}.zip
+          prerelease: false
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  build-windows:
+    needs: quality
+    runs-on: windows-latest
+    env:
+      VCPKG_ROOT: C:\vcpkg
+    steps:
+    - uses: actions/checkout@v6
+    - uses: dtolnay/rust-toolchain@stable
+    - uses: actions/setup-node@v4
+      with:
+        node-version: 22
+    - run: npm install
+    - uses: actions/cache@v5
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+          target
+        key: ${{ runner.os }}-cargo-${{ hashFiles('Cargo.lock') }}
+    - name: Install FFmpeg via vcpkg
+      run: |
+        git clone https://github.com/microsoft/vcpkg.git C:\vcpkg
+        C:\vcpkg\bootstrap-vcpkg.bat
+        C:\vcpkg\vcpkg install ffmpeg[core,avcodec,avformat,avfilter,swscale,swresample]:x64-windows-static-md
+      shell: cmd
+    - name: Build
+      run: cargo build --release
+    - name: Package
+      run: |
+        cd target/release
+        7z a rylus-windows.zip rylus.exe
+      shell: bash
+    - name: Artifacts
+      uses: actions/upload-artifact@v6
+      with:
+        name: windows
+        path: target/release/rylus-windows.zip
+    - name: Publish
+      uses: softprops/action-gh-release@v2
+      if: startsWith(github.ref, 'refs/tags/')
+      with:
+          files: |
+            target/release/rylus-windows.zip
           prerelease: false
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
