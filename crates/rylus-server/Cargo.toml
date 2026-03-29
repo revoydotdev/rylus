@@ -25,6 +25,7 @@ rylus-transport = { workspace = true }
 rylus-gui = { workspace = true, optional = true }
 
 argon2 = "0.5"
+parking_lot = { workspace = true }
 bytes = "1.11"
 clap = { workspace = true }
 clap_complete = { workspace = true }

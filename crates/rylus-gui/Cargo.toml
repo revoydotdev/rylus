@@ -9,6 +9,7 @@ description = "egui GUI for Rylus"
 [dependencies]
 rylus-core = { workspace = true, features = ["gui"] }
 eframe = "0.31"
+parking_lot = { workspace = true }
 egui = "0.31"
 egui_extras = { version = "0.31", features = ["image"] }
 image = { version = "^0.25", features = ["png"], default-features = false }

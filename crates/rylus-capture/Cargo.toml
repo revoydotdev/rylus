@@ -12,6 +12,7 @@ x11 = ["dep:x11rb", "dep:libc"]
 
 [dependencies]
 rylus-core = { workspace = true }
+parking_lot = { workspace = true }
 tracing = { workspace = true }
 x11rb = { version = "0.13", features = ["shm", "randr", "xfixes", "xinput", "composite", "allow-unsafe-code"], optional = true }
 libc = { version = "0.2", optional = true }
