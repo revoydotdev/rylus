@@ -187,45 +187,37 @@ jobs:
   build-windows:
     needs: quality
     if: startsWith(github.ref, 'refs/tags/')
-    runs-on: windows-latest
-    env:
-      VCPKG_ROOT: C:\vcpkg
+    runs-on: [self-hosted, linux, x64]
     steps:
     - uses: actions/checkout@v6
-    - uses: dtolnay/rust-toolchain@stable
-    - uses: actions/setup-node@v4
-      with:
-        node-version: 22
     - run: npm install
-    - uses: actions/cache@v5
-      with:
-        path: |
-          ~/.cargo/registry
-          ~/.cargo/git
-          target
-        key: ${{ runner.os }}-cargo-${{ hashFiles('Cargo.lock') }}
-    - name: Install FFmpeg via vcpkg
-      run: vcpkg install ffmpeg[core,avcodec,avformat,avfilter,swscale,swresample]:x64-windows-static-md
-    - name: Build
-      run: cargo build --release
+    - name: Download FFmpeg Windows libs
+      run: |
+        if [ ! -d /mnt/games/VMs/ffmpeg-win64 ]; then
+          curl -L https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n7.1-latest-win64-lgpl-shared-7.1.zip -o /tmp/ffmpeg.zip
+          unzip -q /tmp/ffmpeg.zip -d /tmp/ffmpeg-extract
+          mv /tmp/ffmpeg-extract/ffmpeg-* /mnt/games/VMs/ffmpeg-win64
+          rm -rf /tmp/ffmpeg.zip /tmp/ffmpeg-extract
+        fi
+    - name: Cross-compile for Windows
+      run: cargo xwin build --release --target x86_64-pc-windows-msvc
       env:
-        FFMPEG_DIR: C:\vcpkg\installed\x64-windows-static-md
+        FFMPEG_DIR: /mnt/games/VMs/ffmpeg-win64
     - name: Package
       run: |
-        cd target/release
-        7z a rylus-windows.zip rylus.exe
-      shell: bash
+        cd target/x86_64-pc-windows-msvc/release
+        zip rylus-windows.zip rylus.exe
     - name: Artifacts
       uses: actions/upload-artifact@v6
       with:
         name: windows
-        path: target/release/rylus-windows.zip
+        path: target/x86_64-pc-windows-msvc/release/rylus-windows.zip
     - name: Publish
       uses: softprops/action-gh-release@v2
       if: startsWith(github.ref, 'refs/tags/')
       with:
           files: |
-            target/release/rylus-windows.zip
+            target/x86_64-pc-windows-msvc/release/rylus-windows.zip
           prerelease: false
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
