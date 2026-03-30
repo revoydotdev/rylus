@@ -140,46 +140,44 @@ jobs:
   build-macos:
     needs: quality
     if: startsWith(github.ref, 'refs/tags/')
-    strategy:
-      matrix:
-        os: [macos-latest, macos-15-intel] # -latest is for Apple Silicon, -15-intel is for Intel
-    runs-on: ${{ matrix.os }}
+    runs-on: [self-hosted, linux, x64]
     steps:
     - uses: actions/checkout@v6
-    - uses: actions/setup-node@v4
-      with:
-        node-version: 22
-    - uses: actions/cache@v5
-      with:
-        path: |
-          ~/.cargo/registry
-          ~/.cargo/git
-          target
-        key: ${{ runner.os }}-cargo-${{ hashFiles('Cargo.lock') }}
-    - name: Download deps
+    - name: Start macOS VM
+      run: /mnt/games/VMs/vm-macos.sh start
+    - name: Sync code to VM
       run: |
-        npm install
-        brew install nasm ffmpeg
-        cargo install cargo-bundle
-      shell: bash
-    - name: Build
-      run: cargo bundle --release --package rylus-server
-    - name: Package
+        rsync -az --delete \
+          -e "ssh -o StrictHostKeyChecking=no -o LogLevel=ERROR -p 2222" \
+          --exclude target --exclude node_modules --exclude .git \
+          . revelri@localhost:~/Rylus/
+    - name: Build in VM
       run: |
-        MACOS_BUILD_NAME=macos-$([ "${{ matrix.os }}" == "macos-latest" ] && echo "arm" || echo "intel")
-        echo "MACOS_BUILD_NAME=$MACOS_BUILD_NAME" >> $GITHUB_ENV
-        cd target/release/bundle/osx/ && zip -r ${MACOS_BUILD_NAME}.zip Rylus.app
+        /mnt/games/VMs/vm-macos.sh ssh 'source "$HOME/.cargo/env" && eval "$(/usr/local/bin/brew shellenv zsh)" && cd ~/Rylus && npm install && cargo bundle --release --package rylus-server'
+    - name: Retrieve artifacts
+      run: |
+        mkdir -p target/release/bundle/osx
+        scp -o StrictHostKeyChecking=no -o LogLevel=ERROR -P 2222 \
+          revelri@localhost:~/Rylus/target/release/bundle/osx/Rylus.app/Contents/MacOS/rylus \
+          target/release/bundle/osx/ || true
+        ssh -o StrictHostKeyChecking=no -o LogLevel=ERROR -p 2222 revelri@localhost \
+          'cd ~/Rylus/target/release/bundle/osx && zip -r /tmp/macos-intel.zip Rylus.app'
+        scp -o StrictHostKeyChecking=no -o LogLevel=ERROR -P 2222 \
+          revelri@localhost:/tmp/macos-intel.zip target/release/bundle/osx/
+    - name: Stop macOS VM
+      if: always()
+      run: /mnt/games/VMs/vm-macos.sh stop
     - name: Artifacts
       uses: actions/upload-artifact@v6
       with:
-        name: ${{ env.MACOS_BUILD_NAME }}
-        path: target/release/bundle/osx/${{ env.MACOS_BUILD_NAME }}.zip
+        name: macos-intel
+        path: target/release/bundle/osx/macos-intel.zip
     - name: Publish
       uses: softprops/action-gh-release@v2
       if: startsWith(github.ref, 'refs/tags/')
       with:
           files: |
-            target/release/bundle/osx/${{ env.MACOS_BUILD_NAME }}.zip
+            target/release/bundle/osx/macos-intel.zip
           prerelease: false
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
