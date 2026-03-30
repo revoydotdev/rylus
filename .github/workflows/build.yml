@@ -26,12 +26,10 @@ jobs:
           libdrm-dev libva-dev \
           pkg-config clang nasm
     - uses: actions/setup-node@v4
-      if: ${{ !contains(runner.name, 'arch') }}
       with:
         node-version: 22
     - run: npm install
     - uses: dtolnay/rust-toolchain@stable
-      if: ${{ !contains(runner.name, 'arch') }}
       with:
         components: clippy, rustfmt
     - uses: actions/cache@v5
@@ -69,11 +67,9 @@ jobs:
           libdrm-dev libva-dev \
           libx11-dev libxext-dev libxrandr-dev libxfixes-dev libxi-dev libxcomposite-dev
     - uses: actions/setup-node@v4
-      if: ${{ !contains(runner.name, 'arch') }}
       with:
         node-version: 22
     - uses: dtolnay/rust-toolchain@stable
-      if: ${{ !contains(runner.name, 'arch') }}
     - uses: actions/cache@v5
       with:
         path: |
