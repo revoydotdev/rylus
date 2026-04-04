@@ -108,7 +108,7 @@ fn check_pixelformat(img: &CGImage) -> Result<(), Box<dyn Error>> {
 }
 
 impl Recorder for RecorderCGDisplay {
-    fn capture(&mut self) -> Result<crate::video::PixelProvider, Box<dyn Error>> {
+    fn capture(&mut self) -> Result<rylus_core::pixel::PixelProvider, Box<dyn Error>> {
         let img = if self.capture_cursor {
             CGDisplay::screenshot(self.display.bounds(), 0, 0, 0)
         } else {
@@ -121,7 +121,7 @@ impl Recorder for RecorderCGDisplay {
 
             // extract raw image data
             self.img_data = Some(img.data());
-            Ok(crate::video::PixelProvider::BGR0S(
+            Ok(rylus_core::pixel::PixelProvider::BGR0S(
                 w,
                 h,
                 img.bytes_per_row(),
@@ -200,7 +200,7 @@ pub struct RecorderCGWindow {
 }
 
 impl Recorder for RecorderCGWindow {
-    fn capture(&mut self) -> Result<crate::video::PixelProvider, Box<dyn Error>> {
+    fn capture(&mut self) -> Result<rylus_core::pixel::PixelProvider, Box<dyn Error>> {
         self.win.update_geometry()?;
         let img = CGDisplay::screenshot_from_windows(
             self.win.bounds,
@@ -221,7 +221,7 @@ impl Recorder for RecorderCGWindow {
 
             // extract raw image data
             self.img_data = Some(img.data());
-            Ok(crate::video::PixelProvider::BGR0S(
+            Ok(rylus_core::pixel::PixelProvider::BGR0S(
                 w,
                 h,
                 img.bytes_per_row(),
