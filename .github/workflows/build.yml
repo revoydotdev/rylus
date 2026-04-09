@@ -137,32 +137,37 @@ jobs:
     needs: quality
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: [self-hosted, linux, x64]
+    env:
+      VM_USER: ${{ vars.MACOS_VM_USER || 'builder' }}
+      VM_PORT: ${{ vars.MACOS_VM_PORT || '2222' }}
+      VM_SCRIPT: /mnt/games/VMs/vm-macos.sh
+      SSH_OPTS: -o StrictHostKeyChecking=no -o LogLevel=ERROR
     steps:
     - uses: actions/checkout@v6
     - name: Start macOS VM
-      run: /mnt/games/VMs/vm-macos.sh start
+      run: $VM_SCRIPT start
     - name: Sync code to VM
       run: |
         rsync -az --delete \
-          -e "ssh -o StrictHostKeyChecking=no -o LogLevel=ERROR -p 2222" \
+          -e "ssh $SSH_OPTS -p $VM_PORT" \
           --exclude target --exclude node_modules --exclude .git \
-          . revelri@localhost:~/Rylus/
+          . $VM_USER@localhost:~/Rylus/
     - name: Build in VM
       run: |
-        /mnt/games/VMs/vm-macos.sh ssh 'source "$HOME/.cargo/env" && eval "$(/usr/local/bin/brew shellenv zsh)" && cd ~/Rylus && npm install && cargo bundle --release --package rylus-server'
+        $VM_SCRIPT ssh 'source "$HOME/.cargo/env" && eval "$(/usr/local/bin/brew shellenv zsh)" && cd ~/Rylus && npm install && cargo bundle --release --package rylus-server'
     - name: Retrieve artifacts
       run: |
         mkdir -p target/release/bundle/osx
-        scp -o StrictHostKeyChecking=no -o LogLevel=ERROR -P 2222 \
-          revelri@localhost:~/Rylus/target/release/bundle/osx/Rylus.app/Contents/MacOS/rylus \
+        scp $SSH_OPTS -P $VM_PORT \
+          $VM_USER@localhost:~/Rylus/target/release/bundle/osx/Rylus.app/Contents/MacOS/rylus \
           target/release/bundle/osx/ || true
-        ssh -o StrictHostKeyChecking=no -o LogLevel=ERROR -p 2222 revelri@localhost \
+        ssh $SSH_OPTS -p $VM_PORT $VM_USER@localhost \
           'cd ~/Rylus/target/release/bundle/osx && zip -r /tmp/macos-intel.zip Rylus.app'
-        scp -o StrictHostKeyChecking=no -o LogLevel=ERROR -P 2222 \
-          revelri@localhost:/tmp/macos-intel.zip target/release/bundle/osx/
+        scp $SSH_OPTS -P $VM_PORT \
+          $VM_USER@localhost:/tmp/macos-intel.zip target/release/bundle/osx/
     - name: Stop macOS VM
       if: always()
-      run: /mnt/games/VMs/vm-macos.sh stop
+      run: $VM_SCRIPT stop
     - name: Artifacts
       uses: actions/upload-artifact@v6
       with:
