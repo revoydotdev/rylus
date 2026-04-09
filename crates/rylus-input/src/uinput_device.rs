@@ -132,6 +132,10 @@ fn create_stylus(name: &str) -> std::io::Result<VirtualDevice> {
             AbsoluteAxisCode::ABS_TILT_Y,
             AbsInfo::new(0, -90, 90, 0, 0, 12),
         ))?
+        .with_absolute_axis(&UinputAbsSetup::new(
+            AbsoluteAxisCode::ABS_DISTANCE,
+            AbsInfo::new(0, 0, ABS_MAXVAL, 0, 0, 12),
+        ))?
         .with_properties(&props)?
         .build()
 }
@@ -329,6 +333,7 @@ const EC_ABSOLUTE_Y: c_int = 0x01;
 const EC_ABSOLUTE_PRESSURE: c_int = 0x18;
 const EC_ABSOLUTE_TILT_X: c_int = 0x1a;
 const EC_ABSOLUTE_TILT_Y: c_int = 0x1b;
+const EC_ABSOLUTE_DISTANCE: c_int = 0x19;
 const EC_ABS_MT_SLOT: c_int = 0x2f;
 const EC_ABS_MT_TOUCH_MAJOR: c_int = 0x30;
 const EC_ABS_MT_TOUCH_MINOR: c_int = 0x31;
@@ -598,6 +603,11 @@ impl InputDevice for UInputDevice {
                             ev(EventType::ABSOLUTE, EC_ABSOLUTE_PRESSURE, pressure),
                             ev(EventType::ABSOLUTE, EC_ABSOLUTE_TILT_X, event.tilt_x),
                             ev(EventType::ABSOLUTE, EC_ABSOLUTE_TILT_Y, event.tilt_y),
+                            ev(
+                                EventType::ABSOLUTE,
+                                EC_ABSOLUTE_DISTANCE,
+                                compute_hover_distance(event.pressure as f32),
+                            ),
                         ]);
 
                         emit_events(&mut self.stylus, &events);
@@ -613,6 +623,7 @@ impl InputDevice for UInputDevice {
                                 ev(EventType::KEY, EC_KEY_TOOL_PEN, 0),
                                 ev(EventType::KEY, EC_KEY_TOOL_RUBBER, 0),
                                 ev(EventType::ABSOLUTE, EC_ABSOLUTE_PRESSURE, 0),
+                                ev(EventType::ABSOLUTE, EC_ABSOLUTE_DISTANCE, ABS_MAXVAL),
                             ],
                         );
                         self.tool_pen_active = false;
@@ -983,6 +994,14 @@ fn compute_transform_touch_size(s: f64) -> i32 {
     (s * ABS_MAX) as i32
 }
 
+pub fn compute_hover_distance(pressure: f32) -> i32 {
+    if pressure > 0.0 {
+        0
+    } else {
+        ABS_MAXVAL
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1152,5 +1171,26 @@ mod tests {
         let err = IoError::new(ErrorKind::BrokenPipe, "test");
         let cerr = map_io_error(err, "ctx");
         assert_eq!(cerr.code(), 1);
+    }
+
+    #[test]
+    fn hover_distance_with_pressure_is_zero() {
+        assert_eq!(compute_hover_distance(0.5), 0);
+        assert_eq!(compute_hover_distance(1.0), 0);
+    }
+
+    #[test]
+    fn hover_distance_max_pressure_is_zero() {
+        assert_eq!(compute_hover_distance(1.0), 0);
+    }
+
+    #[test]
+    fn hover_distance_no_pressure_is_max() {
+        assert_eq!(compute_hover_distance(0.0), ABS_MAXVAL);
+    }
+
+    #[test]
+    fn hover_distance_clamps_negative_pressure() {
+        assert_eq!(compute_hover_distance(-0.5), ABS_MAXVAL);
     }
 }
