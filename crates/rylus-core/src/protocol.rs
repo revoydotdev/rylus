@@ -1,10 +1,10 @@
-use serde::{Deserialize, Deserializer, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 /// Current protocol version.
 ///
 /// Increment when adding new message types or changing semantics.
 /// Clients and server negotiate on the minimum of their versions.
-pub const PROTOCOL_VERSION: u32 = 2;
+pub const PROTOCOL_VERSION: u32 = 3;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Hello {
@@ -33,6 +33,8 @@ pub struct BufferHealth {
 pub enum MessageInbound {
     Hello(Hello),
     PointerEvent(PointerEvent),
+    #[serde(rename = "batched_pointer_events")]
+    BatchedPointerEvents(Vec<PointerEvent>),
     WheelEvent(WheelEvent),
     KeyboardEvent(KeyboardEvent),
     GetCapturableList,
@@ -87,7 +89,7 @@ pub struct CustomInputAreas {
     pub pen: Option<Rect>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub enum PointerType {
     #[serde(rename = "")]
     Unknown,
@@ -168,6 +170,10 @@ fn button_from<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Button, D::
     Button::from_bits(bits).ok_or_else(|| serde::de::Error::custom("Failed to parse button code."))
 }
 
+fn button_to<S: Serializer>(button: &Button, serializer: S) -> Result<S::Ok, S::Error> {
+    serializer.serialize_u8(button.bits())
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct KeyboardEvent {
     pub event_type: KeyboardEventType,
@@ -195,9 +201,9 @@ pub struct PointerEvent {
     pub timestamp: u64,
     pub is_primary: bool,
     pub pointer_type: PointerType,
-    #[serde(deserialize_with = "button_from")]
+    #[serde(serialize_with = "button_to", deserialize_with = "button_from")]
     pub button: Button,
-    #[serde(deserialize_with = "button_from")]
+    #[serde(serialize_with = "button_to", deserialize_with = "button_from")]
     pub buttons: Button,
     pub x: f64,
     pub y: f64,
@@ -207,6 +213,10 @@ pub struct PointerEvent {
     pub twist: i32,
     pub width: f64,
     pub height: f64,
+    #[serde(default)]
+    pub altitude_angle: Option<f32>,
+    #[serde(default)]
+    pub azimuth_angle: Option<f32>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -788,5 +798,171 @@ mod tests {
     fn message_outbound_malformed_json() {
         let result = serde_json::from_str::<MessageOutbound>("{\"Hello\": {}}");
         assert!(result.is_err()); // missing protocol_version
+    }
+
+    // ---- Wave 1/2 additions ----
+
+    #[test]
+    fn altitude_angle_defaults_to_none() {
+        let json = r#"{
+            "event_type": "pointermove",
+            "pointer_id": 1,
+            "timestamp": 0,
+            "is_primary": true,
+            "pointer_type": "mouse",
+            "button": 0,
+            "buttons": 0,
+            "x": 0.0,
+            "y": 0.0,
+            "pressure": 0.0,
+            "tilt_x": 0,
+            "tilt_y": 0,
+            "twist": 0,
+            "width": 0.0,
+            "height": 0.0
+        }"#;
+        let pe: PointerEvent = serde_json::from_str(json).unwrap();
+        assert!(pe.altitude_angle.is_none());
+    }
+
+    #[test]
+    fn azimuth_angle_defaults_to_none() {
+        let json = r#"{
+            "event_type": "pointermove",
+            "pointer_id": 1,
+            "timestamp": 0,
+            "is_primary": true,
+            "pointer_type": "mouse",
+            "button": 0,
+            "buttons": 0,
+            "x": 0.0,
+            "y": 0.0,
+            "pressure": 0.0,
+            "tilt_x": 0,
+            "tilt_y": 0,
+            "twist": 0,
+            "width": 0.0,
+            "height": 0.0
+        }"#;
+        let pe: PointerEvent = serde_json::from_str(json).unwrap();
+        assert!(pe.azimuth_angle.is_none());
+    }
+
+    #[test]
+    fn altitude_azimuth_present() {
+        let json = r#"{
+            "event_type": "pointermove",
+            "pointer_id": 1,
+            "timestamp": 0,
+            "is_primary": true,
+            "pointer_type": "pen",
+            "button": 0,
+            "buttons": 0,
+            "x": 0.5,
+            "y": 0.5,
+            "pressure": 0.8,
+            "tilt_x": 0,
+            "tilt_y": 0,
+            "twist": 0,
+            "width": 0.0,
+            "height": 0.0,
+            "altitude_angle": 0.785,
+            "azimuth_angle": 1.57
+        }"#;
+        let pe: PointerEvent = serde_json::from_str(json).unwrap();
+        assert_eq!(pe.altitude_angle, Some(0.785));
+        assert_eq!(pe.azimuth_angle, Some(1.57));
+    }
+
+    #[test]
+    fn batched_pointer_events_deserialize() {
+        let json = r#"{
+            "batched_pointer_events": [
+                {
+                    "event_type": "pointerdown",
+                    "pointer_id": 1,
+                    "timestamp": 100,
+                    "is_primary": true,
+                    "pointer_type": "touch",
+                    "button": 1,
+                    "buttons": 1,
+                    "x": 0.5,
+                    "y": 0.5,
+                    "pressure": 1.0,
+                    "tilt_x": 0,
+                    "tilt_y": 0,
+                    "twist": 0,
+                    "width": 0.05,
+                    "height": 0.05
+                },
+                {
+                    "event_type": "pointermove",
+                    "pointer_id": 1,
+                    "timestamp": 200,
+                    "is_primary": true,
+                    "pointer_type": "touch",
+                    "button": 1,
+                    "buttons": 1,
+                    "x": 0.6,
+                    "y": 0.6,
+                    "pressure": 0.9,
+                    "tilt_x": 0,
+                    "tilt_y": 0,
+                    "twist": 0,
+                    "width": 0.05,
+                    "height": 0.05
+                }
+            ]
+        }"#;
+        let msg: MessageInbound = serde_json::from_str(json).unwrap();
+        match msg {
+            MessageInbound::BatchedPointerEvents(events) => {
+                assert_eq!(events.len(), 2);
+                assert_eq!(events[0].pointer_id, 1);
+                assert_eq!(events[1].x, 0.6);
+            }
+            other => panic!("Expected BatchedPointerEvents, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn pointer_type_partial_eq() {
+        assert_eq!(PointerType::Mouse, PointerType::Mouse);
+        assert_ne!(PointerType::Mouse, PointerType::Pen);
+        assert_eq!(PointerType::Touch, PointerType::Touch);
+    }
+
+    #[test]
+    fn protocol_version_is_three() {
+        assert_eq!(PROTOCOL_VERSION, 3);
+    }
+
+    #[test]
+    fn pointer_event_with_all_fields_roundtrip() {
+        let pe = PointerEvent {
+            event_type: PointerEventType::MOVE,
+            pointer_id: 42,
+            timestamp: 999,
+            is_primary: true,
+            pointer_type: PointerType::Pen,
+            button: Button::PRIMARY,
+            buttons: Button::PRIMARY,
+            x: 0.5,
+            y: 0.5,
+            pressure: 0.8,
+            tilt_x: 30,
+            tilt_y: -15,
+            twist: 90,
+            width: 0.01,
+            height: 0.02,
+            altitude_angle: Some(0.5),
+            azimuth_angle: Some(1.0),
+        };
+        let json = serde_json::to_string(&pe).unwrap();
+        let back: PointerEvent = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.altitude_angle, Some(0.5));
+        assert_eq!(back.azimuth_angle, Some(1.0));
+        assert_eq!(back.pointer_id, 42);
+        assert_eq!(back.pointer_type, PointerType::Pen);
     }
 }

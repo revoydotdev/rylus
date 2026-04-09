@@ -51,6 +51,14 @@ impl ThemeType {
     }
 }
 
+#[derive(Serialize, Deserialize, Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum TlsMode {
+    #[default]
+    Disabled,
+    Auto,
+    Certified,
+}
+
 #[cfg(target_os = "linux")]
 fn default_wayland_support() -> bool {
     std::env::var("XDG_SESSION_TYPE")
@@ -140,6 +148,29 @@ pub struct Config {
     #[arg(long, help = "Print shell completions for given shell.")]
     #[serde(skip)]
     pub completions: Option<clap_complete::Shell>,
+
+    #[arg(long, help = "TLS mode: disabled, auto, certified")]
+    #[serde(default)]
+    pub tls_mode: Option<String>,
+    #[arg(long, help = "Path to TLS certificate file")]
+    #[serde(default)]
+    pub tls_cert_path: Option<String>,
+    #[arg(long, help = "Path to TLS private key file")]
+    #[serde(default)]
+    pub tls_key_path: Option<String>,
+    #[arg(long, help = "Disable mDNS advertisement")]
+    #[serde(default)]
+    pub no_mdns: bool,
+}
+
+impl Config {
+    pub fn resolve_tls_mode(&self) -> TlsMode {
+        match self.tls_mode.as_deref() {
+            Some("auto") => TlsMode::Auto,
+            Some("certified") => TlsMode::Certified,
+            _ => TlsMode::Disabled,
+        }
+    }
 }
 
 pub fn read_config() -> Option<Config> {
@@ -371,11 +402,58 @@ try_nvenc = false
 
     #[test]
     fn config_toml_skips_transient_fields() {
-        // print_index_html and custom_index_html are marked #[serde(skip)]
-        // so they should not appear in serialized output
         let config = Config::parse_from(["rylus", "--print-index-html"]);
         let toml_str = toml::to_string_pretty(&config).unwrap();
         assert!(!toml_str.contains("print_index_html"));
         assert!(!toml_str.contains("custom_index_html"));
+    }
+
+    #[test]
+    fn tls_mode_defaults_to_disabled() {
+        let config = Config::parse_from::<_, &str>(["rylus"]);
+        assert_eq!(config.resolve_tls_mode(), TlsMode::Disabled);
+    }
+
+    #[test]
+    fn tls_mode_auto() {
+        let config = Config::parse_from(["rylus", "--tls-mode", "auto"]);
+        assert_eq!(config.resolve_tls_mode(), TlsMode::Auto);
+    }
+
+    #[test]
+    fn tls_mode_certified() {
+        let config = Config::parse_from(["rylus", "--tls-mode", "certified"]);
+        assert_eq!(config.resolve_tls_mode(), TlsMode::Certified);
+    }
+
+    #[test]
+    fn tls_mode_unknown_falls_back_to_disabled() {
+        let config = Config::parse_from(["rylus", "--tls-mode", "bogus"]);
+        assert_eq!(config.resolve_tls_mode(), TlsMode::Disabled);
+    }
+
+    #[test]
+    fn no_mdns_defaults_false() {
+        let config = Config::parse_from::<_, &str>(["rylus"]);
+        assert!(!config.no_mdns);
+    }
+
+    #[test]
+    fn no_mdns_flag() {
+        let config = Config::parse_from(["rylus", "--no-mdns"]);
+        assert!(config.no_mdns);
+    }
+
+    #[test]
+    fn tls_cert_key_paths() {
+        let config = Config::parse_from([
+            "rylus",
+            "--tls-cert-path",
+            "/cert.pem",
+            "--tls-key-path",
+            "/key.pem",
+        ]);
+        assert_eq!(config.tls_cert_path.as_deref(), Some("/cert.pem"));
+        assert_eq!(config.tls_key_path.as_deref(), Some("/key.pem"));
     }
 }
