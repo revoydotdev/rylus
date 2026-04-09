@@ -8,9 +8,14 @@ description = "Transport layer (WebSocket) for Rylus"
 
 [dependencies]
 rylus-core = { workspace = true }
-fastwebsockets = { version = "0.10", features = ["upgrade", "unstable-split"] }
+tokio-tungstenite = { workspace = true }
+futures-util = "0.3"
 hyper = { version = "^1.4", features = ["server", "http1", "http2"] }
 hyper-util = { version = "0.1.20", features = ["tokio"] }
 serde_json = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
+flate2 = { version = "1", optional = true }
+
+[features]
+compression = ["flate2"]
