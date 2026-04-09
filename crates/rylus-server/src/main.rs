@@ -10,8 +10,10 @@ use rylus_core::config::{get_config, Config};
 use rylus_core::Web2UiMessage;
 
 mod log;
+mod mdns;
 mod rylus;
 mod session;
+mod tls;
 mod web;
 
 fn main() {
@@ -70,6 +72,14 @@ fn main() {
 
 fn run_headless(conf: Config) {
     let mut rylus_server = rylus::Rylus::new();
+    let mut mdns_publisher = if !conf.no_mdns {
+        Some(mdns::MdnsPublisher::new())
+    } else {
+        None
+    };
+    if let Some(ref mut publisher) = mdns_publisher {
+        publisher.register(conf.web_port, None).ok();
+    }
     if !rylus_server.start(
         &conf,
         Box::new(|msg| match msg {

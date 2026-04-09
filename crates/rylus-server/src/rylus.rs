@@ -1,11 +1,12 @@
 use std::net::SocketAddr;
 use std::sync::Arc;
-use tracing::error;
+use tracing::{error, info, warn};
 
-use rylus_core::config::Config;
+use rylus_core::config::{Config, TlsMode};
 use rylus_core::Web2UiMessage;
 use rylus_encode::EncoderOptions;
 
+use crate::mdns::MdnsPublisher;
 use crate::session::RylusClientConfig;
 use crate::web::{WebServerConfig, WebStartUpMessage};
 
@@ -13,6 +14,7 @@ pub struct Rylus {
     notify_shutdown: Arc<tokio::sync::Notify>,
     web_thread: Option<std::thread::JoinHandle<()>>,
     ui_thread: Option<std::thread::JoinHandle<()>>,
+    mdns_publisher: Option<MdnsPublisher>,
 }
 
 impl Rylus {
@@ -21,6 +23,7 @@ impl Rylus {
             notify_shutdown: Arc::new(tokio::sync::Notify::new()),
             web_thread: None,
             ui_thread: None,
+            mdns_publisher: None,
         }
     }
 
@@ -49,6 +52,44 @@ impl Rylus {
             try_mediafoundation: config.try_mediafoundation,
             #[cfg(not(target_os = "windows"))]
             try_mediafoundation: false,
+
+            ..Default::default()
+        };
+
+        let tls_config = match config.resolve_tls_mode() {
+            TlsMode::Disabled => None,
+            TlsMode::Auto => {
+                let cert_dir = std::path::PathBuf::from("/tmp").join("rylus");
+                match crate::tls::load_or_generate_cert(
+                    &cert_dir.join("cert.der"),
+                    &cert_dir.join("key.der"),
+                ) {
+                    Ok(cfg) => Some(cfg),
+                    Err(err) => {
+                        warn!("TLS auto-setup failed, falling back to plain TCP: {err}");
+                        None
+                    }
+                }
+            }
+            TlsMode::Certified => {
+                let cert_path = config.tls_cert_path.as_deref().unwrap_or("");
+                let key_path = config.tls_key_path.as_deref().unwrap_or("");
+                if cert_path.is_empty() || key_path.is_empty() {
+                    warn!("TLS mode is 'certified' but no cert/key paths provided");
+                    None
+                } else {
+                    match crate::tls::load_or_generate_cert(
+                        std::path::Path::new(cert_path),
+                        std::path::Path::new(key_path),
+                    ) {
+                        Ok(cfg) => Some(cfg),
+                        Err(err) => {
+                            warn!("Failed to load TLS certificate: {err}");
+                            None
+                        }
+                    }
+                }
+            }
         };
 
         let (sender_ui, mut receiver_ui) = tokio::sync::mpsc::channel(100);
@@ -83,6 +124,7 @@ impl Rylus {
                 #[cfg(feature = "gui")]
                 no_gui: config.no_gui,
             },
+            tls_config,
         );
 
         match receiver_startup.blocking_recv() {
@@ -107,10 +149,24 @@ impl Rylus {
                 on_web_message(msg);
             }
         }));
+
+        if !config.no_mdns {
+            let mut publisher = MdnsPublisher::new();
+            if let Err(err) = publisher.register(config.web_port, None) {
+                warn!("mDNS registration failed (non-fatal): {err}");
+            } else {
+                info!("mDNS service registered on port {}", config.web_port);
+                self.mdns_publisher = Some(publisher);
+            }
+        }
+
         true
     }
 
     pub fn stop(&mut self) {
+        if let Some(mut publisher) = self.mdns_publisher.take() {
+            publisher.unregister();
+        }
         self.notify_shutdown.notify_one();
         self.wait();
     }
@@ -147,5 +203,29 @@ impl rylus_gui::RylusServer for Rylus {
 impl Drop for Rylus {
     fn drop(&mut self) {
         self.stop();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::Parser;
+
+    #[test]
+    fn rylus_tls_mode_resolved_from_config() {
+        let config = Config::parse_from::<_, &str>(["rylus"]);
+        assert_eq!(config.resolve_tls_mode(), TlsMode::Disabled);
+    }
+
+    #[test]
+    fn rylus_mdns_disabled_when_flag_set() {
+        let config = Config::parse_from::<_, &str>(["rylus", "--no-mdns"]);
+        assert!(config.no_mdns);
+    }
+
+    #[test]
+    fn rylus_new_has_no_mdns_publisher() {
+        let rylus = Rylus::new();
+        assert!(rylus.mdns_publisher.is_none());
     }
 }
