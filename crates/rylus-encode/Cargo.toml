@@ -9,6 +9,8 @@ description = "Video encoding for Rylus"
 [dependencies]
 rylus-core = { workspace = true }
 tracing = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
 
 [dependencies.ffmpeg-sys-next]
 version = "8"

@@ -35,6 +35,11 @@ clap_complete = "4.5.29"
 serde = { version = "^1.0", features = ["derive"] }
 serde_json = "^1.0"
 tokio = { version = "^1", features = ["fs", "macros", "rt-multi-thread", "sync", "net", "time"] }
+tokio-tungstenite = { version = "0.26", features = ["connect"] }
+rustls = { version = "0.23", features = ["ring"] }
+tokio-rustls = "0.26"
+rcgen = { version = "0.13", features = ["x509-parser"] }
+mdns-sd = "0.13"
 tracing = "^0.1"
 tracing-subscriber = { version = "^0.3", features = ["ansi", "json"], default-features = false }
 
