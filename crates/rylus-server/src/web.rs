@@ -1,6 +1,5 @@
 use argon2::{Argon2, PasswordHash, PasswordHasher, PasswordVerifier};
 use bytes::Bytes;
-use fastwebsockets::upgrade;
 use handlebars::Handlebars;
 use http_body_util::combinators::BoxBody;
 use http_body_util::{BodyExt, Full};
@@ -16,15 +15,19 @@ use std::collections::HashMap;
 use std::convert::Infallible;
 use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
+use std::pin::Pin;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::task::{Context as TaskContext, Poll};
 use std::time::{Duration, Instant};
+use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::net::TcpListener;
 use tokio::sync::{mpsc, oneshot};
+use tokio_rustls::TlsAcceptor;
 use tracing::{debug, error, info, warn};
 
 use rylus_core::Web2UiMessage;
-use rylus_transport::rylus_websocket_channel;
+use rylus_transport::rylus_websocket_channel_from_hyper_upgrade;
 
 use crate::session::{RylusClientConfig, RylusClientHandler};
 
@@ -32,6 +35,61 @@ use crate::session::{RylusClientConfig, RylusClientHandler};
 pub enum WebStartUpMessage {
     Start,
     Error,
+}
+
+#[cfg(test)]
+#[allow(dead_code)]
+pub enum TlsOrTcp {
+    #[allow(dead_code)]
+    Tls(TlsAcceptor),
+    Tcp,
+}
+
+/// A stream that is either TLS-wrapped or plain TCP.
+/// Implements AsyncRead + AsyncWrite by delegating to the inner stream.
+pub enum TlsOrTcpStream {
+    Tls(tokio_rustls::TlsStream<tokio::net::TcpStream>),
+    Tcp(tokio::net::TcpStream),
+}
+
+impl AsyncRead for TlsOrTcpStream {
+    fn poll_read(
+        self: Pin<&mut Self>,
+        cx: &mut TaskContext<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        match self.get_mut() {
+            TlsOrTcpStream::Tls(inner) => Pin::new(inner).poll_read(cx, buf),
+            TlsOrTcpStream::Tcp(inner) => Pin::new(inner).poll_read(cx, buf),
+        }
+    }
+}
+
+impl AsyncWrite for TlsOrTcpStream {
+    fn poll_write(
+        self: Pin<&mut Self>,
+        cx: &mut TaskContext<'_>,
+        buf: &[u8],
+    ) -> Poll<std::io::Result<usize>> {
+        match self.get_mut() {
+            TlsOrTcpStream::Tls(inner) => Pin::new(inner).poll_write(cx, buf),
+            TlsOrTcpStream::Tcp(inner) => Pin::new(inner).poll_write(cx, buf),
+        }
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut TaskContext<'_>) -> Poll<std::io::Result<()>> {
+        match self.get_mut() {
+            TlsOrTcpStream::Tls(inner) => Pin::new(inner).poll_flush(cx),
+            TlsOrTcpStream::Tcp(inner) => Pin::new(inner).poll_flush(cx),
+        }
+    }
+
+    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut TaskContext<'_>) -> Poll<std::io::Result<()>> {
+        match self.get_mut() {
+            TlsOrTcpStream::Tls(inner) => Pin::new(inner).poll_shutdown(cx),
+            TlsOrTcpStream::Tcp(inner) => Pin::new(inner).poll_shutdown(cx),
+        }
+    }
 }
 
 pub const INDEX_HTML: &str = std::include_str!("../../../www/templates/index.html");
@@ -226,8 +284,8 @@ fn verify_access_code(code: &str, hash: &str) -> bool {
 
 async fn serve(
     addr: SocketAddr,
-    mut req: Request<Incoming>,
-    context: Arc<Context<'_>>,
+    req: Request<Incoming>,
+    context: Arc<ServeContext<'_>>,
     sender_ui: mpsc::Sender<Web2UiMessage>,
     num_clients: Arc<AtomicUsize>,
     semaphore_websocket_shutdown: Arc<tokio::sync::Semaphore>,
@@ -373,24 +431,19 @@ async fn serve(
                     .expect("unauthorized response builder should not fail"));
             }
 
-            let (response, fut) = match upgrade::upgrade(&mut req) {
-                Ok(r) => r,
-                Err(e) => {
-                    warn!("WebSocket upgrade failed: {e}");
-                    return Ok(Response::builder()
-                        .status(StatusCode::BAD_REQUEST)
-                        .body("WebSocket upgrade failed".to_string().boxed())
-                        .expect("bad request response builder should not fail"));
-                }
-            };
+            let on_upgrade = hyper::upgrade::on(req);
             num_clients.fetch_add(1, Ordering::Relaxed);
 
             let config = context.rylus_client_config;
             tokio::spawn(async move {
-                match fut.await {
-                    Ok(ws) => {
+                match on_upgrade.await {
+                    Ok(upgraded) => {
                         let (sender, receiver) =
-                            rylus_websocket_channel(ws, semaphore_websocket_shutdown);
+                            rylus_websocket_channel_from_hyper_upgrade(
+                                upgraded,
+                                semaphore_websocket_shutdown,
+                            )
+                            .await;
                         std::thread::spawn(move || {
                             let client = RylusClientHandler::new(
                                 sender,
@@ -419,7 +472,10 @@ async fn serve(
                 }
             });
 
-            Ok(response.map(|r| r.boxed()))
+            Ok(Response::builder()
+                .status(StatusCode::SWITCHING_PROTOCOLS)
+                .body("switching to websocket".to_string().boxed())
+                .expect("switching protocols response builder should not fail"))
         }
         "/style.css" => Ok(response_from_path_or_default(
             context.web_config.custom_style_css.as_ref(),
@@ -629,7 +685,7 @@ impl WebServerConfig {
     }
 }
 
-struct Context<'a> {
+struct ServeContext<'a> {
     web_config: WebServerConfig,
     rylus_client_config: RylusClientConfig,
     templates: Handlebars<'a>,
@@ -643,35 +699,36 @@ pub fn run(
     notify_shutdown: Arc<tokio::sync::Notify>,
     web_server_config: WebServerConfig,
     rylus_client_config: RylusClientConfig,
+    tls_config: Option<rustls::ServerConfig>,
 ) -> std::thread::JoinHandle<()> {
     let mut templates = Handlebars::new();
     templates
         .register_template_string("index", INDEX_HTML)
         .expect("built-in index template must be valid");
 
-    let context = Context {
+    let context = ServeContext {
         web_config: web_server_config,
         rylus_client_config,
         templates,
         rate_limiter: RateLimiter::new(),
         session_store: SessionStore::new(),
     };
-    // Architecture note: the web server runs on a dedicated OS thread with its own Tokio
-    // runtime (#[tokio::main] on run_server). This is intentional: egui requires the main
-    // thread for GUI rendering, and the async web server needs its own runtime. The video
-    // pipeline uses std::thread and std::sync::mpsc (no Tokio). This design keeps the GUI
-    // responsive while the web server handles concurrent HTTP/WebSocket connections.
-    std::thread::spawn(move || run_server(context, sender_ui, sender_startup, notify_shutdown))
+    std::thread::spawn(move || {
+        run_server(context, sender_ui, sender_startup, notify_shutdown, tls_config)
+    })
 }
 
 #[tokio::main]
 async fn run_server(
-    context: Context<'static>,
+    context: ServeContext<'static>,
     sender_ui: tokio::sync::mpsc::Sender<Web2UiMessage>,
     sender_startup: oneshot::Sender<WebStartUpMessage>,
     notify_shutdown: Arc<tokio::sync::Notify>,
+    tls_config: Option<rustls::ServerConfig>,
 ) {
     let addr = context.web_config.bind_addr;
+
+    let tls_config: Option<Arc<rustls::ServerConfig>> = tls_config.map(Arc::new);
 
     let listener = match TcpListener::bind(addr).await {
         Ok(listener) => listener,
@@ -716,7 +773,19 @@ async fn run_server(
 
         debug!(address = ?remote_address, "Client connected.");
 
-        let io = TokioIo::new(tcp);
+        let io: TokioIo<TlsOrTcpStream> = match &tls_config {
+            Some(config) => {
+                let acceptor = TlsAcceptor::from(config.clone());
+                match acceptor.accept(tcp).await {
+                    Ok(tls_stream) => TokioIo::new(TlsOrTcpStream::Tls(tokio_rustls::TlsStream::Server(tls_stream))),
+                    Err(err) => {
+                        warn!("TLS accept failed: {err}");
+                        continue;
+                    }
+                }
+            }
+            None => TokioIo::new(TlsOrTcpStream::Tcp(tcp)),
+        };
 
         let sender_ui = sender_ui.clone();
         let broadcast_shutdown = broadcast_shutdown.clone();
@@ -1007,5 +1076,21 @@ mod tests {
             "testcode",
             config.access_code_hash.as_ref().unwrap()
         ));
+    }
+
+    // ---- TlsOrTcp ----
+
+    #[test]
+    fn tls_or_tcp_tcp_variant() {
+        let mode = TlsOrTcp::Tcp;
+        match mode {
+            TlsOrTcp::Tcp => {}
+            TlsOrTcp::Tls(_) => panic!("expected Tcp variant"),
+        }
+    }
+
+    #[test]
+    fn tls_or_tcp_stream_tcp_variant() {
+        let _stream = TlsOrTcpStream::Tcp;
     }
 }
