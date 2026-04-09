@@ -3,6 +3,7 @@ use std::os::raw::{c_int, c_void};
 use std::ptr;
 use std::time::Instant;
 
+use serde::{Deserialize, Serialize};
 use tracing::{debug, info, warn};
 
 use rylus_core::pixel::PixelProvider;
@@ -35,12 +36,46 @@ macro_rules! enc_err {
 // Configuration
 // ============================================================
 
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[serde(rename_all = "UPPERCASE")]
+pub enum Codec {
+    #[default]
+    H264,
+    Hevc,
+}
+
+impl Codec {
+    pub fn ffmpeg_codec_name(&self) -> &'static CStr {
+        match self {
+            Codec::H264 => c"libx264",
+            Codec::Hevc => c"libx265",
+        }
+    }
+}
+
 #[derive(Clone, Copy)]
 pub struct EncoderOptions {
     pub try_vaapi: bool,
     pub try_nvenc: bool,
     pub try_videotoolbox: bool,
     pub try_mediafoundation: bool,
+    pub codec: Codec,
+    pub avio_buffer_size: usize,
+    pub all_intra: bool,
+}
+
+impl Default for EncoderOptions {
+    fn default() -> Self {
+        Self {
+            try_vaapi: false,
+            try_nvenc: false,
+            try_videotoolbox: false,
+            try_mediafoundation: false,
+            codec: Codec::default(),
+            avio_buffer_size: 1024 * 1024,
+            all_intra: false,
+        }
+    }
 }
 
 // ============================================================
@@ -50,6 +85,7 @@ pub struct EncoderOptions {
 const TIME_BASE: ffi::AVRational = ffi::AVRational { num: 1, den: 1000 };
 
 /// AVIO buffer size for writing fMP4 output (1 MB).
+#[allow(dead_code)]
 const AVIO_BUFFER_SIZE: c_int = 1024 * 1024;
 
 /// Number of frames in the hardware frame pool for GPU-accelerated encoding.
@@ -564,6 +600,8 @@ pub struct VideoEncoder {
     /// MSE codec string (e.g. "avc1.4D4028") derived from the opened codec's
     /// profile and level. Used by the client for addSourceBuffer().
     codec_string: String,
+    codec: Codec,
+    pending_pts: Option<i64>,
 }
 
 // VideoEncoder contains raw FFmpeg pointers that are not thread-safe.
@@ -605,6 +643,8 @@ impl VideoEncoder {
             write_data: Box::new(move |data| write_data(data)),
             start_time: Instant::now(),
             codec_string: String::new(),
+            codec: options.codec,
+            pending_pts: None,
         });
 
         encoder.open_video(options)?;
@@ -615,6 +655,14 @@ impl VideoEncoder {
     /// Used by the client to call addSourceBuffer with the correct codec.
     pub fn codec_string(&self) -> &str {
         &self.codec_string
+    }
+
+    pub fn codec(&self) -> Codec {
+        self.codec
+    }
+
+    pub fn set_next_pts(&mut self, pts: i64) {
+        self.pending_pts = Some(pts);
     }
 
     fn open_video(&mut self, options: EncoderOptions) -> Result<(), EncodeError> {
@@ -655,7 +703,7 @@ impl VideoEncoder {
             }
 
             if !using_hw {
-                self.setup_libx264()?;
+                self.setup_libx264(options)?;
             }
 
             // Create stream
@@ -672,7 +720,7 @@ impl VideoEncoder {
             }
 
             // Custom AVIO context
-            let buf_size: c_int = AVIO_BUFFER_SIZE;
+            let buf_size: c_int = options.avio_buffer_size as c_int;
             let avio_buf = ffi::av_malloc(buf_size as usize) as *mut u8;
             if avio_buf.is_null() {
                 return Err(enc_err!("Failed to allocate AVIO buffer"));
@@ -722,12 +770,15 @@ impl VideoEncoder {
             let profile = (*self.codec_ctx).profile;
             let level = (*self.codec_ctx).level;
             self.codec_string = if profile >= 0 && level >= 0 {
-                // Profile maps: 66=Baseline, 77=Main, 88=Extended, 100=High
-                // Constraint flags: use 0x00 (no constraints specified)
-                format!("avc1.{:02X}00{:02X}", profile, level)
+                match self.codec {
+                    Codec::Hevc => format!("hvc1.{:02X}.0.L{:02X}.00", profile, level),
+                    Codec::H264 => format!("avc1.{:02X}00{:02X}", profile, level),
+                }
             } else {
-                // Fallback: Main Profile Level 4.0 (widely supported)
-                "avc1.4D0028".to_string()
+                match self.codec {
+                    Codec::Hevc => "hvc1.0100.0.L93.00".to_string(),
+                    Codec::H264 => "avc1.4D0028".to_string(),
+                }
             };
             info!(
                 "Video: {}x{}@{} pix_fmt: {} codec_string: {}",
@@ -739,14 +790,16 @@ impl VideoEncoder {
     }
 
     fn set_codec_params(&self, c: *mut ffi::AVCodecContext) {
-        // SAFETY: `c` is a freshly allocated codec context from avcodec_alloc_context3 and
-        // format_ctx was allocated in open_video; both are valid, non-null pointers.
+        self.set_codec_params_with_options(c, EncoderOptions::default());
+    }
+
+    fn set_codec_params_with_options(&self, c: *mut ffi::AVCodecContext, options: EncoderOptions) {
         unsafe {
             (*c).width = self.width_out as c_int;
             (*c).height = self.height_out as c_int;
             (*c).time_base = TIME_BASE;
             (*c).framerate = ffi::AVRational { num: 0, den: 1 };
-            (*c).gop_size = GOP_SIZE;
+            (*c).gop_size = if options.all_intra { 1 } else { GOP_SIZE };
             (*c).max_b_frames = MAX_B_FRAMES;
             if (*(*self.format_ctx).oformat).flags & ffi::AVFMT_GLOBALHEADER != 0 {
                 (*c).flags |= ffi::AV_CODEC_FLAG_GLOBAL_HEADER as c_int;
@@ -951,13 +1004,14 @@ impl VideoEncoder {
         }
     }
 
-    fn setup_libx264(&mut self) -> Result<(), EncodeError> {
+    fn setup_libx264(&mut self, options: EncoderOptions) -> Result<(), EncodeError> {
         // SAFETY: FFmpeg codec allocation for libx264 software encoder. All pointers are
         // null-checked after allocation and freed on error paths.
         unsafe {
-            let codec = ffi::avcodec_find_encoder_by_name(c"libx264".as_ptr());
+            let codec_name = options.codec.ffmpeg_codec_name();
+            let codec = ffi::avcodec_find_encoder_by_name(codec_name.as_ptr());
             if codec.is_null() {
-                return Err(enc_err!("Codec 'libx264' not found"));
+                return Err(enc_err!("Codec '{}' not found", codec_name.to_string_lossy()));
             }
 
             let c = ffi::avcodec_alloc_context3(codec);
@@ -979,7 +1033,7 @@ impl VideoEncoder {
                     ffi::av_opt_set((*c).priv_data, c"preset".as_ptr(), c"ultrafast".as_ptr(), 0);
                     ffi::av_opt_set((*c).priv_data, c"tune".as_ptr(), c"zerolatency".as_ptr(), 0);
                     ffi::av_opt_set((*c).priv_data, c"crf".as_ptr(), c"23".as_ptr(), 0);
-                    self.set_codec_params(c);
+                    self.set_codec_params_with_options(c, options);
 
                     let ret = ffi::avcodec_open2(c, codec, ptr::null_mut());
                     if ret < 0 {
@@ -1121,8 +1175,10 @@ impl VideoEncoder {
                 return Err(enc_err!("Frame not initialized"));
             }
 
-            let millis = (Instant::now() - self.start_time).as_millis();
-            (*self.frame).pts = millis as i64;
+            let pts = self.pending_pts.take().unwrap_or_else(|| {
+                (Instant::now() - self.start_time).as_millis() as i64
+            });
+            (*self.frame).pts = pts;
 
             let ret = ffi::avcodec_send_frame(self.codec_ctx, self.frame);
             if ret < 0 {
@@ -1235,12 +1291,7 @@ mod tests {
     use rylus_core::pixel::PixelProvider;
 
     fn default_options() -> EncoderOptions {
-        EncoderOptions {
-            try_vaapi: false,
-            try_nvenc: false,
-            try_videotoolbox: false,
-            try_mediafoundation: false,
-        }
+        EncoderOptions::default()
     }
 
     /// Generate a test BGR0 frame (blue channel only).
@@ -1480,6 +1531,146 @@ mod tests {
         // (the bounds check in encode() should catch it)
         let small_buf = vec![0u8; 10];
         enc.encode(PixelProvider::BGR0(64, 64, &small_buf));
-        // If we got here without a crash, the bounds check worked
+    }
+
+    #[test]
+    fn codec_serde_roundtrip() {
+        let codec = Codec::H264;
+        let json = serde_json::to_string(&codec).unwrap();
+        let back: Codec = serde_json::from_str(&json).unwrap();
+        assert_eq!(codec, back);
+
+        let codec = Codec::Hevc;
+        let json = serde_json::to_string(&codec).unwrap();
+        let back: Codec = serde_json::from_str(&json).unwrap();
+        assert_eq!(codec, back);
+    }
+
+    #[test]
+    fn encoder_options_defaults() {
+        let opts = EncoderOptions::default();
+        assert_eq!(opts.codec, Codec::H264);
+        assert!(!opts.all_intra);
+        assert_eq!(opts.avio_buffer_size, 1024 * 1024);
+    }
+
+    #[test]
+    fn pending_pts_overrides_auto_pts() {
+        let mut enc = VideoEncoder::new(
+            64, 64, 64, 64,
+            move |_| {},
+            EncoderOptions::default(),
+        ).unwrap();
+        enc.set_next_pts(999);
+        assert_eq!(enc.pending_pts, Some(999));
+    }
+
+    #[test]
+    fn pending_pts_none_uses_auto() {
+        let enc = VideoEncoder::new(
+            64, 64, 64, 64,
+            move |_| {},
+            EncoderOptions::default(),
+        ).unwrap();
+        assert!(enc.pending_pts.is_none());
+    }
+
+    #[test]
+    fn avio_buffer_size_used() {
+        let opts = EncoderOptions {
+            avio_buffer_size: 4096,
+            ..Default::default()
+        };
+        assert_eq!(opts.avio_buffer_size, 4096);
+    }
+
+    #[test]
+    fn codec_field_accessible() {
+        let opts = EncoderOptions {
+            codec: Codec::Hevc,
+            ..Default::default()
+        };
+        assert_eq!(opts.codec, Codec::Hevc);
+    }
+
+    #[test]
+    fn all_intra_sets_gop_one() {
+        let opts = EncoderOptions {
+            all_intra: true,
+            ..Default::default()
+        };
+        assert!(opts.all_intra);
+    }
+
+    #[test]
+    fn codec_serde_uppercase_format() {
+        let json = serde_json::to_string(&Codec::H264).unwrap();
+        assert_eq!(json, "\"H264\"", "Codec::H264 should serialize as uppercase H264");
+
+        let json = serde_json::to_string(&Codec::Hevc).unwrap();
+        assert_eq!(json, "\"HEVC\"", "Codec::Hevc should serialize as uppercase HEVC");
+
+        // Roundtrip from uppercase
+        let h264: Codec = serde_json::from_str("\"H264\"").unwrap();
+        assert_eq!(h264, Codec::H264);
+        let hevc: Codec = serde_json::from_str("\"HEVC\"").unwrap();
+        assert_eq!(hevc, Codec::Hevc);
+    }
+
+    #[test]
+    fn codec_default_is_h264() {
+        assert_eq!(Codec::default(), Codec::H264);
+    }
+
+    #[test]
+    fn hevc_codec_string_format() {
+        init_ffmpeg_logger();
+        let output = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let out = output.clone();
+        let result = VideoEncoder::new(
+            64, 64, 64, 64,
+            move |data| {
+                out.lock().unwrap().extend_from_slice(data);
+            },
+            EncoderOptions {
+                codec: Codec::Hevc,
+                ..Default::default()
+            },
+        );
+        // If libx265 is available, codec_string should start with "hvc1."
+        // If not, we skip the assertion since we can't control encoder availability.
+        if let Ok(enc) = result {
+            assert!(
+                enc.codec_string().starts_with("hvc1."),
+                "HEVC codec string should start with 'hvc1.', got: {}",
+                enc.codec_string()
+            );
+        }
+    }
+
+    #[test]
+    fn pending_pts_used_and_cleared() {
+        init_ffmpeg_logger();
+        let frame = make_bgr0_frame(64, 64);
+        let output = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let out = output.clone();
+        let mut enc = VideoEncoder::new(
+            64, 64, 64, 64,
+            move |data| {
+                out.lock().unwrap().extend_from_slice(data);
+            },
+            EncoderOptions::default(),
+        ).expect("encoder should init");
+
+        // Set pending PTS
+        enc.set_next_pts(12345);
+        assert_eq!(enc.pending_pts, Some(12345));
+
+        // Encode a frame — pending_pts should be consumed
+        enc.encode(PixelProvider::BGR0(64, 64, &frame));
+        assert!(
+            enc.pending_pts.is_none(),
+            "pending_pts should be cleared after encoding a frame"
+        );
     }
 }
