@@ -15,6 +15,8 @@ version = "0.17.0"
 authors = ["HMH <henry@freedesk.net>"]
 edition = "2021"
 license = "AGPL-3.0-or-later"
+repository = "https://github.com/revelri/Rylus"
+homepage = "https://github.com/revelri/Rylus"
 
 [workspace.dependencies]
 # Internal crates
