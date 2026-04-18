@@ -1,17 +1,73 @@
+/* Rylus tablet UI — design tokens per DESIGN.md.
+ *
+ * The web client shares the native client's design language: dark-first,
+ * industrial, single cyan accent, inline contextual errors (toasts), no
+ * alert dialogs. Geist is the font; we fall back to the system UI stack
+ * when it can't load rather than shipping the WOFF2 in-repo. */
+
+:root {
+    color-scheme: dark light;
+
+    --rylus-accent: #00aaff;
+    --rylus-accent-hover: #33bbff;
+    --rylus-success: #22c55e;
+    --rylus-warn: #f59e0b;
+    --rylus-error: #ef4444;
+
+    --rylus-radius-sm: 4px;
+    --rylus-radius-md: 8px;
+
+    /* 200ms transitions per DESIGN.md motion contract. */
+    --rylus-transition: 200ms cubic-bezier(0.22, 1, 0.36, 1);
+
+    --rylus-font-ui: "Geist", "Inter", -apple-system, BlinkMacSystemFont,
+        "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    --rylus-font-mono: "Geist Mono", ui-monospace, "SF Mono", Menlo,
+        Consolas, "Liberation Mono", monospace;
+}
+
 @media (prefers-color-scheme: dark) {
     :root {
-        --color: #ddd;
-        --background-color-1: #303030;
-        --background-color-2: #202020;
+        --color: #e0e0e0;
+        --color-muted: #9a9a9a;
+        --background-color-1: #2a2a2a;
+        --background-color-2: #1e1e1e;
+        --border-color: rgba(255, 255, 255, 0.08);
+        --toast-bg: #2a2a2a;
+        --toast-color: #e0e0e0;
     }
 }
+
 @media (prefers-color-scheme: light) {
     :root {
-        --color: #111;
-        --background-color-1: #eee;
-        --background-color-2: #fff;
+        --color: #111111;
+        --color-muted: #666666;
+        --background-color-1: #f4f4f4;
+        --background-color-2: #fafafa;
+        --border-color: rgba(0, 0, 0, 0.08);
+        --toast-bg: #ffffff;
+        --toast-color: #111111;
     }
 }
+
+@media (prefers-reduced-motion: reduce) {
+    :root {
+        --rylus-transition: 0ms linear;
+    }
+    *, *::before, *::after {
+        animation-duration: 0ms !important;
+        transition-duration: 0ms !important;
+    }
+}
+
+html, body {
+    font-family: var(--rylus-font-ui);
+    font-size: 15px;
+    font-weight: 400;
+    line-height: 1.4;
+    -webkit-font-smoothing: antialiased;
+}
+
 main {
     touch-action: none;
     user-select: none;
@@ -21,6 +77,7 @@ main {
     -moz-user-select: none;
     -ms-user-select: none;
 }
+
 body, html, main {
     width: 100%;
     height: 100%;
@@ -31,6 +88,7 @@ body, html, main {
     color: var(--color);
     background: var(--background-color-2);
 }
+
 video {
     max-width: 100%;
     max-height: 100%;
@@ -39,12 +97,14 @@ video {
     display: block;
     margin: auto auto;
 }
+
 canvas {
     position: absolute;
     width: 100%;
     height: 100%;
 }
-input[type='text'] {
+
+input[type='text'], input[type='number'] {
     touch-action: auto !important;
     user-select: text;
     -webkit-touch-callout: default;
@@ -52,10 +112,38 @@ input[type='text'] {
     -khtml-user-select: text;
     -moz-user-select: text;
     -ms-user-select: text;
+    font: inherit;
+    color: var(--color);
+    background: var(--background-color-2);
+    border: 1px solid var(--border-color);
+    border-radius: var(--rylus-radius-sm);
+    padding: 0.35em 0.6em;
 }
-input[type='range']::-webkit-slider-runnable-track, input[type="range"]::-moz-range-track {
-      background-color: #00aaff;
+
+input[type='range']::-webkit-slider-runnable-track,
+input[type='range']::-moz-range-track {
+    background-color: var(--rylus-accent);
 }
+
+button, select {
+    font: inherit;
+    color: var(--color);
+    background: var(--background-color-2);
+    border: 1px solid var(--border-color);
+    border-radius: var(--rylus-radius-sm);
+    padding: 0.4em 0.9em;
+    cursor: pointer;
+    transition: background var(--rylus-transition), border-color var(--rylus-transition);
+}
+
+button:hover, select:hover {
+    border-color: var(--rylus-accent);
+}
+
+button:active {
+    background: var(--background-color-1);
+}
+
 .container {
     width: 100%;
     height: 100%;
@@ -63,15 +151,18 @@ input[type='range']::-webkit-slider-runnable-track, input[type="range"]::-moz-ra
     justify-content: center;
     align-items: center;
 }
+
 #settings, #handle, #debug_overlay {
     color: var(--color);
     background: var(--background-color-1);
 }
+
 #settings_scroll {
     overflow: auto;
     width: 100%;
     height: 100%;
 }
+
 #settings {
     width: 16em;
     display: block;
@@ -81,106 +172,146 @@ input[type='range']::-webkit-slider-runnable-track, input[type="range"]::-moz-ra
     bottom: 0;
     transform: none;
     padding: 1em;
-    font-family: sans-serif;
-    transition: transform 0.5s, opacity 0.5s;
+    border-left: 1px solid var(--border-color);
+    transition: transform var(--rylus-transition), opacity var(--rylus-transition);
 }
+
 @media (max-width: 480px) {
     #settings {
         width: 100%;
         right: 0;
         padding: 0.5em;
+        border-left: 0;
+        border-top: 1px solid var(--border-color);
     }
 }
+
 #settings.lefty {
     left: 0;
     right: auto;
+    border-left: 0;
+    border-right: 1px solid var(--border-color);
 }
+
 #settings.hide, #settings.vanish {
     transform: translateX(100%);
     opacity: 40%;
 }
+
 #settings.hide.lefty, #settings.vanish.lefty {
     transform: translateX(-100%);
     opacity: 40%;
 }
+
 #handle {
     position: absolute;
     top: 0;
     left: -1em;
     width: 1em;
-    border-radius: 0 0 0 0.25em;
+    border-radius: 0 0 0 var(--rylus-radius-sm);
     padding: 0.2em 0 0.1em 0;
     font-size: 150%;
-    text-align:center;
+    text-align: center;
 }
+
 .lefty #handle {
     left: auto;
     right: -1em;
-    border-radius: 0 0 0.25em 0;
+    border-radius: 0 0 var(--rylus-radius-sm) 0;
 }
+
 .vanish #handle, video.vanish, canvas.vanish {
     display: none !important;
 }
+
 #settings h2 {
     font-size: 1.2em;
     margin: 0;
     text-align: center;
+    font-weight: 700;
 }
+
 #settings h3 {
     font-size: 1em;
     margin-top: 0.2em;
     text-align: center;
+    font-weight: 500;
+    color: var(--color-muted);
 }
+
 #settings section {
     margin-bottom: 1em;
 }
+
 #settings section label, section button {
     display: block;
     margin-top: 0.5em;
 }
+
+#settings section small {
+    display: block;
+    font-size: 0.8em;
+    color: var(--color-muted);
+    font-weight: 400;
+}
+
 #settings section.hide, section label.hide, section button.hide, #debug_overlay.hide {
     display: none !important;
 }
+
 select {
     width: 15em;
 }
+
 #displayoptions {
     display: flex;
     flex-direction: row;
 }
+
 .lefty #displayoptions {
     flex-direction: row-reverse;
 }
+
 #displayoptions label {
     flex-grow: 1;
 }
+
 label input:disabled + span {
-    color: #888;
+    color: var(--color-muted);
 }
+
 #frame_update_limit {
     width: auto;
 }
+
 #lefty {
     display: none;
 }
+
 #leftylabel::before {
     content: "❮ ";
 }
+
 .lefty #leftylabel {
     text-align: right;
 }
+
 .lefty #leftylabel::before {
     content: "";
 }
+
 .lefty #leftylabel::after {
     content: " ❯";
 }
+
 #vanish {
     text-align: right;
 }
+
 .lefty #vanish {
     text-align: left;
 }
+
 #log {
     max-width: 15em;
     overflow-x: auto;
@@ -191,11 +322,15 @@ label input:disabled + span {
     -khtml-user-select: text;
     -moz-user-select: text;
     -ms-user-select: text;
+    font-family: var(--rylus-font-mono);
+    font-size: 0.8em;
+    color: var(--color-muted);
 }
+
 #debug_overlay {
     --padding: 3px;
     position: absolute;
-    top:0;
+    top: 0;
     bottom: 0;
     left: 0;
     right: 0;
@@ -210,11 +345,96 @@ label input:disabled + span {
     white-space: pre;
     font-size: small;
     text-align: center;
+    font-family: var(--rylus-font-mono);
 }
+
 #debug_overlay span.updated {
-    color: darkgreen;
+    color: var(--rylus-success);
 }
+
 :focus-visible {
-    outline: 2px solid #00aaff;
+    outline: 2px solid var(--rylus-accent);
     outline-offset: 2px;
+}
+
+/* Connection-quality pip (corner indicator). Populated by lib.ts once the
+ * first HeartbeatAck arrives. Kept small and muted on purpose — signal,
+ * not decoration. */
+#conn_quality {
+    position: fixed;
+    top: max(0.6em, env(safe-area-inset-top));
+    right: max(0.6em, env(safe-area-inset-right));
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: transparent;
+    box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.35);
+    z-index: 10;
+    pointer-events: none;
+    transition: background var(--rylus-transition);
+}
+
+.lefty #conn_quality {
+    right: auto;
+    left: max(0.6em, env(safe-area-inset-left));
+}
+
+/* Toast notifications — replaces modal alert() dialogs. Stacked in a
+ * container fixed to the bottom-centre; swipe from 4px below and fade out
+ * after ~3s. Colors match semantic tokens from DESIGN.md. */
+.rylus-toast-container {
+    position: fixed;
+    bottom: max(1em, env(safe-area-inset-bottom));
+    left: 50%;
+    transform: translateX(-50%);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.5em;
+    z-index: 10000;
+    pointer-events: none;
+    max-width: min(90vw, 480px);
+}
+
+.rylus-toast {
+    pointer-events: auto;
+    padding: 0.65em 1em;
+    background: var(--toast-bg);
+    color: var(--toast-color);
+    border: 1px solid var(--border-color);
+    border-left-width: 3px;
+    border-radius: var(--rylus-radius-md);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
+    font-size: 0.95em;
+    transform: translateY(4px);
+    opacity: 0;
+    animation: rylus-toast-in 180ms ease-out forwards;
+}
+
+.rylus-toast.info    { border-left-color: var(--rylus-accent); }
+.rylus-toast.success { border-left-color: var(--rylus-success); }
+.rylus-toast.error   { border-left-color: var(--rylus-error); }
+
+.rylus-toast.fade-out {
+    animation: rylus-toast-out 240ms ease-in forwards;
+}
+
+@keyframes rylus-toast-in {
+    to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes rylus-toast-out {
+    to { opacity: 0; transform: translateY(-4px); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .rylus-toast {
+        animation: none;
+        opacity: 1;
+        transform: none;
+    }
+    .rylus-toast.fade-out {
+        opacity: 0;
+        animation: none;
+    }
 }
