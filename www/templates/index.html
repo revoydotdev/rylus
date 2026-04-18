@@ -2,11 +2,16 @@
 <html lang="en">
 
 <head>
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <meta name="mobile-web-app-capable" content="yes">
+    <meta name="theme-color" content="#1e1e1e" media="(prefers-color-scheme: dark)">
+    <meta name="theme-color" content="#fafafa" media="(prefers-color-scheme: light)">
+    <meta name="color-scheme" content="dark light">
     <title>Rylus</title>
+    <link rel="manifest" href="/manifest.webmanifest">
+    <link rel="apple-touch-icon" href="/manifest.webmanifest">
     <link rel="stylesheet" href="style.css">
     <script src="lib.js"></script>
     <script>
@@ -20,6 +25,7 @@
         <video id="video" autoplay muted defaultMuted playsinline disablePictureInPicture aria-label="Screen mirror video"></video>
         <canvas id="canvas" class="vanish" aria-label="Drawing canvas"></canvas>
         <div id="debug_overlay" class="hide"></div>
+        <div id="conn_quality" role="status" aria-live="polite" aria-label="Connection quality" title="Waiting for first heartbeat..."></div>
     </main>
     <div id="settings">
         <div id="handle">⠿</div>
@@ -52,6 +58,15 @@
                 <label><input type="checkbox" id="enable_mouse" checked /> <span>Enable Mouse</span></label>
                 <label><input type="checkbox" id="enable_stylus" checked /> <span>Enable Stylus</span></label>
                 <label><input type="checkbox" id="enable_touch" checked /> <span>Enable Touch</span></label>
+                <label><input type="checkbox" id="enable_palm_rejection" checked /> <span>Palm Rejection<br><small>Ignore touch right after pen contact.</small></span></label>
+                <label>Pressure Curve:
+                    <br>
+                    <select id="pressure_curve" aria-label="Pressure curve preset">
+                        <option value="linear" selected>Linear (default)</option>
+                        <option value="soft">Soft (lighter strokes)</option>
+                        <option value="firm">Firm (stronger strokes)</option>
+                    </select>
+                </label>
                 <label {{#if (not uinput_enabled)}}class="hide" {{/if}}>
                     <input type="checkbox" id="uinput_support" checked />
                     <span>Enable uinput</span>

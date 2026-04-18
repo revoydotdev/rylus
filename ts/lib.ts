@@ -1,3 +1,13 @@
+import {
+    applyPressureCurve,
+    calculateConnectionQuality,
+    createPalmRejector,
+    getQualityIndicatorColor,
+    PRESSURE_PRESETS,
+    PressurePreset,
+    showToast,
+} from "./utils";
+
 interface Window {
     ManagedMediaSource: any;
 }
@@ -22,10 +32,48 @@ let check_video: HTMLInputElement;
 
 let activeWebSocket: WebSocket | null = null;
 
+// Connection-quality telemetry: recorded on Heartbeat send, resolved on
+// HeartbeatAck arrival. Drives the corner pip that tells the user whether
+// their network or the server is the cause of any lag.
+let last_heartbeat_sent_at: number | null = null;
+let current_rtt_ms: number | null = null;
+const rtt_samples: number[] = [];
+
 function wsSend(data: string) {
     if (activeWebSocket && activeWebSocket.readyState === WebSocket.OPEN) {
         activeWebSocket.send(data);
     }
+}
+
+function send_heartbeat() {
+    last_heartbeat_sent_at = performance.now();
+    wsSend('"Heartbeat"');
+}
+
+function on_heartbeat_ack() {
+    if (last_heartbeat_sent_at === null) return;
+    const rtt = performance.now() - last_heartbeat_sent_at;
+    last_heartbeat_sent_at = null;
+    current_rtt_ms = rtt;
+    rtt_samples.push(rtt);
+    if (rtt_samples.length > 8) rtt_samples.shift();
+    update_connection_pip();
+}
+
+function rtt_jitter_ms(): number {
+    if (rtt_samples.length < 2) return 0;
+    const mean = rtt_samples.reduce((a, b) => a + b, 0) / rtt_samples.length;
+    const variance = rtt_samples.reduce((s, x) => s + (x - mean) ** 2, 0) / rtt_samples.length;
+    return Math.sqrt(variance);
+}
+
+function update_connection_pip() {
+    const pip = document.getElementById("conn_quality");
+    if (!pip || current_rtt_ms === null) return;
+    const quality = calculateConnectionQuality(current_rtt_ms, rtt_jitter_ms());
+    pip.style.background = getQualityIndicatorColor(quality);
+    pip.title = `${quality} — RTT ${Math.round(current_rtt_ms)} ms, jitter ${Math.round(rtt_jitter_ms())} ms`;
+    pip.dataset.quality = quality;
 }
 
 function run(level: string) {
@@ -126,6 +174,8 @@ class Settings {
     range_min_pressure: HTMLInputElement;
     check_aggressive_seek: HTMLInputElement;
     client_name_input: HTMLInputElement;
+    pressure_curve_select: HTMLSelectElement | null = null;
+    pressure_curve_preset: PressurePreset = "linear";
     visible: boolean;
     custom_input_areas: CustomInputAreas;
     settings: HTMLElement;
@@ -142,6 +192,15 @@ class Settings {
         this.scale_video_output = this.scale_video_input.nextElementSibling as HTMLOutputElement;
         this.range_min_pressure = document.getElementById("min_pressure") as HTMLInputElement;
         this.client_name_input = document.getElementById("client_name") as HTMLInputElement;
+        this.pressure_curve_select = document.getElementById(
+            "pressure_curve",
+        ) as HTMLSelectElement | null;
+        if (this.pressure_curve_select) {
+            this.pressure_curve_select.onchange = () => {
+                this.pressure_curve_preset = this.pressure_curve_select!.value as PressurePreset;
+                this.save_settings();
+            };
+        }
         this.frame_rate_input.oninput = () => {
             this.frame_rate_output.value = Math.round(frame_rate_scale(this.frame_rate_input.valueAsNumber)).toString();
         }
@@ -218,6 +277,8 @@ class Settings {
         this.checks.get("enable_mouse").onchange = upd_pointer;
         this.checks.get("enable_stylus").onchange = upd_pointer;
         this.checks.get("enable_touch").onchange = upd_pointer;
+        const palm_check = this.checks.get("enable_palm_rejection");
+        if (palm_check) palm_check.onchange = () => this.save_settings();
 
         this.checks.get("energysaving").onchange = (e) => {
             this.save_settings();
@@ -275,6 +336,7 @@ class Settings {
         settings["min_pressure"] = this.range_min_pressure.value;
         settings["custom_input_areas"] = this.custom_input_areas;
         settings["client_name"] = this.client_name_input.value;
+        settings["pressure_curve"] = this.pressure_curve_preset;
         localStorage.setItem("settings", JSON.stringify(settings));
     }
 
@@ -344,6 +406,13 @@ class Settings {
             let client_name = settings["client_name"];
             if (client_name)
                 this.client_name_input.value = client_name;
+
+            let pressure_curve = settings["pressure_curve"];
+            if (pressure_curve === "linear" || pressure_curve === "soft" || pressure_curve === "firm") {
+                this.pressure_curve_preset = pressure_curve;
+                if (this.pressure_curve_select)
+                    this.pressure_curve_select.value = pressure_curve;
+            }
 
         } catch (e) {
             console.warn("Failed to load settings from localStorage:", e);
@@ -427,6 +496,11 @@ let settings: Settings;
 let debug_overlay: HTMLElement;
 let last_pointer_data: Object;
 
+// Palm rejection: kept at module scope so the 100ms suppression window
+// survives PointerHandler re-instantiation when the user toggles input
+// checkboxes. `createPalmRejector` is defined in utils.ts.
+const palm_rejector = createPalmRejector(100);
+
 class PEvent {
     event_type: string;
     pointer_id: number;
@@ -486,7 +560,12 @@ class PEvent {
         this.y = (event.clientY - targetRect.top) / targetRect.height * y_scale + y_offset;
         // this.movement_x = event.movementX ? event.movementX : 0;
         // this.movement_y = event.movementY ? event.movementY : 0;
-        this.pressure = event.pressure === 0 ? 0 : Math.max(event.pressure, settings.range_min_pressure.valueAsNumber);
+        let raw_pressure = event.pressure === 0 ? 0 : Math.max(event.pressure, settings.range_min_pressure.valueAsNumber);
+        let curve_preset = settings.pressure_curve_preset;
+        if (event.pointerType === "pen" && curve_preset !== "linear" && raw_pressure > 0) {
+            raw_pressure = applyPressureCurve(raw_pressure, PRESSURE_PRESETS[curve_preset]);
+        }
+        this.pressure = raw_pressure;
         this.tilt_x = event.tiltX;
         this.tilt_y = event.tiltY;
         this.width = event.width / diag_len;
@@ -839,6 +918,19 @@ class PointerHandler {
             }
         }
         if (this.pointerTypes.includes(event.pointerType)) {
+            // Palm rejection: any pen contact "locks out" touch for 100ms. Only
+            // active when the user has stylus input enabled — if they've turned
+            // pen off and touch on, they probably want raw touch.
+            const palm_reject_active =
+                settings.checks.get("enable_palm_rejection")?.checked !== false
+                && settings.checks.get("enable_stylus")?.checked === true;
+            if (palm_reject_active) {
+                if (event.pointerType === "pen") {
+                    palm_rejector.onPenEvent();
+                } else if (event.pointerType === "touch" && palm_rejector.shouldRejectTouch()) {
+                    return;
+                }
+            }
             let rect = (event.target as HTMLElement).getBoundingClientRect();
             const events = event_type === "pointermove" ? (event.getCoalescedEvents?.() ?? [event]) : [event];
             for (let event of events) {
@@ -1028,6 +1120,18 @@ function handle_messages(
             } else if (typeof msg == "object") {
                 if ("Hello" in msg) {
                     log(LogLevel.INFO, "Server protocol version: " + msg["Hello"]["protocol_version"]);
+                } else if ("HelloNack" in msg) {
+                    const nack = msg["HelloNack"];
+                    log(LogLevel.ERROR, "Server rejected client protocol: " + JSON.stringify(nack));
+                    showToast(
+                        (nack && nack.reason) ||
+                            "This page is out of date — reloading to pick up the new client.",
+                        "error",
+                        4500,
+                    );
+                    setTimeout(() => location.reload(), 2000);
+                } else if ("HeartbeatAck" in msg) {
+                    on_heartbeat_ack();
                 } else if ("VideoInit" in msg) {
                     let vi = msg["VideoInit"];
                     if (vi && vi.codec_string) {
@@ -1037,7 +1141,7 @@ function handle_messages(
                 } else if ("CapturableList" in msg)
                     onCapturableList(msg["CapturableList"]);
                 else if ("Error" in msg)
-                    alert(msg["Error"]);
+                    showToast(String(msg["Error"]), "error", 4000);
                 else if ("ConfigError" in msg) {
                     onConfigError(msg["ConfigError"]);
                 } else if ("CustomInputAreas" in msg) {
@@ -1110,8 +1214,37 @@ function check_apis() {
     }
 }
 
+function register_service_worker() {
+    if (!("serviceWorker" in navigator)) return;
+    // Only register over secure contexts; registering over plain HTTP is a no-op on iOS
+    // and prints a scary warning on Chrome/Android. Rylus ships with TLS on by default,
+    // so on a vanilla install this always runs; a user who explicitly disabled TLS
+    // doesn't need offline PWA support anyway.
+    if (location.protocol !== "https:" && location.hostname !== "localhost") return;
+    navigator.serviceWorker.register("/sw.js").catch((e) => {
+        log(LogLevel.WARN, "Service worker registration failed: " + e);
+    });
+}
+
+function check_browser_quirks() {
+    const ua = navigator.userAgent;
+    // Chrome on iPadOS is known-broken for MSE video playback. Safari and Firefox work.
+    // The crPr token is unique to Chrome iOS. Show one toast, don't hard-fail — the
+    // user might be on a desktop Chrome connecting to Rylus via ipad.local and just
+    // happen to match this sniff; worst case they see an unnecessary message.
+    if (/\bCriOS\b/.test(ua)) {
+        showToast(
+            "Chrome on iPadOS can't play the video stream. Please reopen this page in Safari or Firefox.",
+            "error",
+            6000,
+        );
+    }
+}
+
 function init() {
     check_apis();
+    check_browser_quirks();
+    register_service_worker();
 
     let protocol = document.location.protocol == "https:" ? "wss://" : "ws://";
     let webSocket = new WebSocket(
@@ -1165,10 +1298,13 @@ function init() {
     let is_reconnecting = false
     let is_connected = false
     let heartbeat_timer: number | null = null
-    const HEARTBEAT_INTERVAL = 30000  // 30s — well within 60s server idle timeout
+    const HEARTBEAT_INTERVAL = 5000  // 5s — well within 60s idle timeout, fast enough to
+                                     // keep the connection-quality pip responsive.
     function start_heartbeat() {
         stop_heartbeat()
-        heartbeat_timer = window.setInterval(() => wsSend('"Heartbeat"'), HEARTBEAT_INTERVAL)
+        // Send the first beat immediately so the pip is populated without a 5s delay.
+        send_heartbeat()
+        heartbeat_timer = window.setInterval(() => send_heartbeat(), HEARTBEAT_INTERVAL)
     }
     function stop_heartbeat() {
         if (heartbeat_timer !== null) {
@@ -1287,7 +1423,7 @@ function init() {
             start_heartbeat()
 
             // Re-send handshake and config
-            wsSend(JSON.stringify({"Hello": {"protocol_version": 2}}))
+            wsSend(JSON.stringify({"Hello": {"protocol_version": 3}}))
             wsSend('"GetCapturableList"')
             if (!settings.video_enabled())
                 wsSend('"PauseVideo"')
@@ -1298,7 +1434,7 @@ function init() {
                 new KeyboardHandler(newSocket)
                 new PointerHandler(newSocket)
             },
-                (err) => alert(err),
+                (err) => showToast(String(err), "error", 4000),
                 (window_names) => settings.onCapturableList(window_names)
             )
 
@@ -1343,13 +1479,13 @@ function init() {
             is_connected = true;
         }
     },
-        (err) => alert(err),
+        (err) => showToast(String(err), "error", 4000),
         (window_names) => settings.onCapturableList(window_names)
     );
     window.onunload = () => { webSocket.close(); }
     webSocket.onopen = function(event) {
         start_heartbeat()
-        wsSend(JSON.stringify({"Hello": {"protocol_version": 2}}));
+        wsSend(JSON.stringify({"Hello": {"protocol_version": 3}}));
         wsSend('"GetCapturableList"');
         if (!settings.video_enabled())
             wsSend('"PauseVideo"');
@@ -1366,6 +1502,10 @@ function init() {
     }
     frame_rate_stats();
 }
+
+// `run` is invoked by an inline <script> tag in index.html; bundling wraps this
+// file in an IIFE, so we have to re-expose it on the global object.
+(globalThis as any).run = run;
 
 // object-fit: fill; <-- this is unfortunately not supported on iOS, so we use the following
 // workaround
