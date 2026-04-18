@@ -1,5 +1,76 @@
 # Changelog
 
+## [0.17.0] - 2026-04-18
+
+### Added
+
+- **TLS-by-default:** Server now generates and serves a self-signed
+  certificate on first run unless `--tls-mode disabled` is passed. Access
+  codes and input events no longer travel in cleartext on the LAN by
+  default. A loud `WARN` is logged when TLS is explicitly disabled.
+- **mDNS service discovery:** Server publishes `_rylus._tcp.local.` with
+  a short PID-derived collision suffix, so two Rylus instances on the
+  same LAN never silently clobber each other's instance name.
+- **Multi-device broadcast plumbing:** `StreamSession` fan-out via
+  `tokio::sync::broadcast` (capacity 32) wires one shared capture and
+  encode pipeline to N clients, with per-client input devices retained.
+- **Connection-quality indicator:** Tablet UI exposes a corner pip
+  (green/amber/red) driven by RTT derived from server `HeartbeatAck`
+  echoes every 5 seconds. Hover/tap for numeric RTT and jitter.
+- **Client-side palm rejection:** Pen contact suppresses incoming touch
+  events for 100 ms, gated by a new **Palm Rejection** settings toggle.
+  Only active when stylus input is enabled.
+- **Stylus pressure curves:** User-selectable `linear` / `soft` / `firm`
+  presets applied to pen pressure before it ships on the wire. Persisted
+  in `localStorage`.
+- **ABS_DISTANCE hover:** Linux uinput stylus declares the distance axis
+  at device setup and emits a heuristic hover distance (full on 0 pressure,
+  zero otherwise) with a 50 ms lift-off timeout workaround for browsers
+  that don't fire `pointerleave` consistently.
+- **PWA manifest + service worker:** Tablet page can now be installed to
+  the home screen and survives brief network blips by caching the shell
+  (index, `lib.js`, `style.css`, manifest). The SW never intercepts `/ws`
+  or `/api/*` so streaming state stays live.
+- **HelloNack + protocol versioning guard:** Server rejects clients below
+  `MIN_CLIENT_PROTOCOL_VERSION` with a typed `HelloNack` message; the
+  client reacts by toasting "page is out of date" and reloading after 2 s.
+- **Chrome-on-iPadOS detection:** One-time toast steers users to Safari
+  or Firefox (which work) instead of failing silently in MSE playback.
+
+### Changed
+
+- **Design refresh:** `www/static/style.css` rewritten to match
+  DESIGN.md — `#1e1e1e`/`#2a2a2a` surfaces, Geist font stack with
+  system fallback, toast component, focus-visible ring, and
+  `prefers-reduced-motion` honoring motion transitions.
+- **Error UI:** All three `alert()` calls replaced with inline toasts
+  (error variant). Per DESIGN.md: inline contextual errors, never modal
+  dialogs.
+- **Heartbeat interval:** Reduced from 30 s to 5 s so RTT samples
+  refresh at human timescale for the connection-quality pip, still well
+  within the 60 s idle timeout.
+- **Client handshake:** Declares `protocol_version: 3` instead of `2`.
+
+### Fixed
+
+- **Auth bypass on `/settings` and `/api/config`:** The server settings
+  page and its JSON config API are now gated behind the same access-code
+  session cookie as `/stream`. Previously an unauthenticated LAN peer
+  could enumerate capturables, read the access code, or overwrite the
+  server config.
+
+### Dev / CI
+
+- **Tests in CI:** Quality gate now runs `cargo test --workspace` and
+  `npm test` (84 TS unit tests + 210 Rust unit tests) before any build.
+- **Clippy warnings cleared:** Resolved `let_unit_value`,
+  `large_enum_variant`, and `duplicated_attribute` warnings so the
+  `-D warnings` gate doesn't need clippy suppressions outside TLS
+  stream-enum hot-path indirection.
+- **Esbuild bundling:** `package.json` and `build.rs` switched to
+  `esbuild --bundle` so `ts/lib.ts` can `import` from `ts/utils.ts`.
+  New `ts/sw.ts` bundle produces `www/static/sw.js`.
+
 ## [0.16.0] - 2026-03-24
 
 ### Added
