@@ -200,10 +200,7 @@ mod tests {
 
         let text_msg = Message::Text(r#""Heartbeat""#.into());
         assert!(text_msg.is_text());
-        assert_eq!(
-            text_msg.into_text().unwrap().as_str(),
-            r#""Heartbeat""#
-        );
+        assert_eq!(text_msg.into_text().unwrap().as_str(), r#""Heartbeat""#);
 
         let close_msg = Message::Close(None);
         assert!(close_msg.is_close());
@@ -219,10 +216,9 @@ mod tests {
     fn ws_message_variants_are_constructible() {
         let raw = WsMessage::Raw(Message::Text("test".into()));
         let video = WsMessage::Video(vec![0xFF; 1024]);
-        let outbound =
-            WsMessage::MessageOutbound(rylus_core::protocol::MessageOutbound::Error(
-                "test error".into(),
-            ));
+        let outbound = WsMessage::MessageOutbound(rylus_core::protocol::MessageOutbound::Error(
+            "test error".into(),
+        ));
 
         match raw {
             WsMessage::Raw(_) => {}
@@ -273,15 +269,12 @@ mod tests {
         let (done_tx, done_rx) = tokio::sync::oneshot::channel::<()>();
 
         let client_handle = tokio::spawn(async move {
-            let (ws_stream, _) =
-                tokio_tungstenite::client_async("ws://localhost", client_io)
-                    .await
-                    .expect("client connect should succeed");
+            let (ws_stream, _) = tokio_tungstenite::client_async("ws://localhost", client_io)
+                .await
+                .expect("client connect should succeed");
             let (mut write, _read) = ws_stream.split();
             write
-                .send(Message::Text(
-                    r#""Heartbeat""#.into(),
-                ))
+                .send(Message::Text(r#""Heartbeat""#.into()))
                 .await
                 .expect("client send should succeed");
             done_rx.await.ok();
@@ -300,13 +293,10 @@ mod tests {
             let _ = result_tx.send(result);
         });
 
-        let result = tokio::time::timeout(
-            std::time::Duration::from_secs(2),
-            result_rx,
-        )
-        .await
-        .expect("receive should not timeout")
-        .expect("result channel should not close");
+        let result = tokio::time::timeout(std::time::Duration::from_secs(2), result_rx)
+            .await
+            .expect("receive should not timeout")
+            .expect("result channel should not close");
 
         done_tx.send(()).ok();
 
@@ -326,19 +316,15 @@ mod tests {
 
         // Spawn client FIRST — it will read what the server sends.
         let client_handle = tokio::spawn(async move {
-            let (ws_stream, _) =
-                tokio_tungstenite::client_async("ws://localhost", client_io)
-                    .await
-                    .expect("client connect should succeed");
+            let (ws_stream, _) = tokio_tungstenite::client_async("ws://localhost", client_io)
+                .await
+                .expect("client connect should succeed");
             let (_write, mut read) = ws_stream.split();
-            let msg = tokio::time::timeout(
-                std::time::Duration::from_secs(2),
-                read.next(),
-            )
-            .await
-            .expect("client read should not timeout")
-            .expect("should receive a message")
-            .expect("message should be ok");
+            let msg = tokio::time::timeout(std::time::Duration::from_secs(2), read.next())
+                .await
+                .expect("client read should not timeout")
+                .expect("should receive a message")
+                .expect("message should be ok");
             assert!(msg.is_binary(), "expected binary frame, got: {msg:?}");
             assert_eq!(
                 msg.into_data(),
@@ -371,19 +357,15 @@ mod tests {
 
         // Spawn client FIRST — it will read what the server sends.
         let client_handle = tokio::spawn(async move {
-            let (ws_stream, _) =
-                tokio_tungstenite::client_async("ws://localhost", client_io)
-                    .await
-                    .expect("client connect should succeed");
+            let (ws_stream, _) = tokio_tungstenite::client_async("ws://localhost", client_io)
+                .await
+                .expect("client connect should succeed");
             let (_write, mut read) = ws_stream.split();
-            let msg = tokio::time::timeout(
-                std::time::Duration::from_secs(2),
-                read.next(),
-            )
-            .await
-            .expect("client read should not timeout")
-            .expect("should receive a message")
-            .expect("message should be ok");
+            let msg = tokio::time::timeout(std::time::Duration::from_secs(2), read.next())
+                .await
+                .expect("client read should not timeout")
+                .expect("should receive a message")
+                .expect("message should be ok");
             assert!(msg.is_text(), "expected text frame, got: {msg:?}");
             let text = msg.into_text().unwrap();
             assert!(
@@ -400,9 +382,7 @@ mod tests {
 
         tokio::task::spawn_blocking(move || {
             sender
-                .send_message(rylus_core::protocol::MessageOutbound::Error(
-                    "test".into(),
-                ))
+                .send_message(rylus_core::protocol::MessageOutbound::Error("test".into()))
                 .expect("send_message should succeed");
         })
         .await
@@ -420,10 +400,9 @@ mod tests {
         let shutdown_sem = semaphore.clone();
 
         let client_handle = tokio::spawn(async move {
-            let (ws_stream, _) =
-                tokio_tungstenite::client_async("ws://localhost", client_io)
-                    .await
-                    .expect("client connect should succeed");
+            let (ws_stream, _) = tokio_tungstenite::client_async("ws://localhost", client_io)
+                .await
+                .expect("client connect should succeed");
             drop(ws_stream);
         });
 
@@ -442,13 +421,10 @@ mod tests {
 
         shutdown_sem.add_permits(1);
 
-        let _count = tokio::time::timeout(
-            std::time::Duration::from_secs(2),
-            handle,
-        )
-        .await
-        .expect("shutdown should complete within timeout")
-        .expect("spawn_blocking should not panic");
+        let _count = tokio::time::timeout(std::time::Duration::from_secs(2), handle)
+            .await
+            .expect("shutdown should complete within timeout")
+            .expect("spawn_blocking should not panic");
 
         client_handle.await.expect("client task should complete");
     }
