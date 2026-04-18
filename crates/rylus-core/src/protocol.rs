@@ -6,6 +6,13 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 /// Clients and server negotiate on the minimum of their versions.
 pub const PROTOCOL_VERSION: u32 = 3;
 
+/// Minimum client protocol version the server will accept.
+///
+/// A client below this version receives a `HelloNack` and must upgrade.
+/// Bump this when a wire-breaking change ships and old clients would
+/// silently misinterpret new messages.
+pub const MIN_CLIENT_PROTOCOL_VERSION: u32 = 2;
+
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Hello {
     pub protocol_version: u32,
@@ -50,6 +57,15 @@ pub enum MessageInbound {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum MessageOutbound {
     Hello(Hello),
+    /// Sent when the client's protocol version is below
+    /// `MIN_CLIENT_PROTOCOL_VERSION`. Client should reload to fetch the
+    /// current bundle; keeping this as a typed message (not generic Error)
+    /// lets the client special-case the reload prompt.
+    HelloNack {
+        server_version: u32,
+        min_client_version: u32,
+        reason: String,
+    },
     CapturableList(Vec<String>),
     NewVideo,
     /// Sent before video data to tell the client which codec string to use
@@ -61,6 +77,12 @@ pub enum MessageOutbound {
     CustomInputAreas(CustomInputAreas),
     ConfigError(String),
     Error(String),
+    /// Echo of a client Heartbeat. `server_ts_ms` is the server's receive
+    /// timestamp in milliseconds since UNIX epoch. The client subtracts its
+    /// own send time to derive RTT for the connection-quality indicator.
+    HeartbeatAck {
+        server_ts_ms: u64,
+    },
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]

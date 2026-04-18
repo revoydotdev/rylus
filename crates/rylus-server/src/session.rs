@@ -11,7 +11,7 @@ use rylus_capture::{get_capturables, Capturable, Recorder};
 use rylus_core::error::CErrorCode;
 use rylus_core::protocol::{
     ClientConfiguration, Hello, KeyboardEvent, MessageInbound, MessageOutbound, PointerEvent,
-    RylusReceiver, RylusSender, WheelEvent, PROTOCOL_VERSION,
+    RylusReceiver, RylusSender, WheelEvent, MIN_CLIENT_PROTOCOL_VERSION, PROTOCOL_VERSION,
 };
 use rylus_encode::{EncoderOptions, VideoEncoder};
 use rylus_input::device::{InputDevice, InputDeviceType};
@@ -161,7 +161,16 @@ impl<S, R, FnUInput> RylusClientHandler<S, R, FnUInput> {
                                 warn!("Failed to send BufferHealth to video thread: {e}");
                             }
                         }
-                        MessageInbound::Heartbeat => {} // keepalive; receipt resets idle timer
+                        MessageInbound::Heartbeat => {
+                            // keepalive; receipt resets idle timer. Echo the server's
+                            // receive timestamp so the client can compute RTT for the
+                            // connection-quality indicator.
+                            let server_ts_ms = std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .map(|d| d.as_millis() as u64)
+                                .unwrap_or(0);
+                            self.send_message(MessageOutbound::HeartbeatAck { server_ts_ms });
+                        }
                         MessageInbound::ChooseCustomInputAreas => {
                             #[cfg(feature = "gui")]
                             {
@@ -236,6 +245,19 @@ impl<S, R, FnUInput> RylusClientHandler<S, R, FnUInput> {
     where
         S: RylusSender,
     {
+        if hello.protocol_version < MIN_CLIENT_PROTOCOL_VERSION {
+            tracing::warn!(
+                "Rejecting client hello: v{} is below minimum v{}",
+                hello.protocol_version,
+                MIN_CLIENT_PROTOCOL_VERSION,
+            );
+            self.send_message(MessageOutbound::HelloNack {
+                server_version: PROTOCOL_VERSION,
+                min_client_version: MIN_CLIENT_PROTOCOL_VERSION,
+                reason: "Client is too old — reload the page to pick up the new bundle.".into(),
+            });
+            return;
+        }
         let negotiated = PROTOCOL_VERSION.min(hello.protocol_version);
         tracing::info!(
             "Client hello: protocol v{}, server v{}, negotiated v{}",
@@ -366,7 +388,6 @@ impl<S, R, FnUInput> RylusClientHandler<S, R, FnUInput> {
     }
 }
 
-#[allow(dead_code)]
 // ---------------------------------------------------------------------------
 // Multi-device broadcast: shared capture+encode pipeline
 // ---------------------------------------------------------------------------
@@ -466,7 +487,7 @@ fn handle_video_broadcast(
     let _ = event_tx.send(StreamEvent::ConfigOk);
 
     let event_tx_clone = event_tx.clone();
-    let _encoder = match VideoEncoder::new(
+    match VideoEncoder::new(
         1,
         1,
         1,
