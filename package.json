@@ -1,9 +1,9 @@
 {
   "private": true,
   "scripts": {
-    "build": "esbuild ts/lib.ts --target=es2020 --minify --outfile=www/static/lib.js",
-    "build:dev": "esbuild ts/lib.ts --target=es2020 --outfile=www/static/lib.js",
-    "watch": "esbuild ts/lib.ts --target=es2020 --outfile=www/static/lib.js --watch",
+    "build": "esbuild ts/lib.ts --bundle --target=es2020 --minify --outfile=www/static/lib.js && esbuild ts/sw.ts --bundle --target=es2020 --minify --outfile=www/static/sw.js",
+    "build:dev": "esbuild ts/lib.ts --bundle --target=es2020 --outfile=www/static/lib.js && esbuild ts/sw.ts --bundle --target=es2020 --outfile=www/static/sw.js",
+    "watch": "esbuild ts/lib.ts --bundle --target=es2020 --outfile=www/static/lib.js --watch",
     "test": "vitest run",
     "test:watch": "vitest"
   },

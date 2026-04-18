@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 fn main() {
@@ -7,25 +7,67 @@ fn main() {
         .unwrap()
         .parent()
         .unwrap();
-    let ts_file = workspace_root.join("ts/lib.ts");
-    let js_file = workspace_root.join("www/static/lib.js");
 
-    // Rebuild when the TS source or the generated JS changes
-    println!("cargo:rerun-if-changed={}", ts_file.display());
-    println!("cargo:rerun-if-changed={}", js_file.display());
+    // Entry points that esbuild should bundle. Keep these in sync with the
+    // `build` script in the top-level package.json.
+    let bundles: &[(&str, &str)] = &[
+        ("ts/lib.ts", "www/static/lib.js"),
+        ("ts/sw.ts", "www/static/sw.js"),
+        ("ts/utils.ts", "/dev/null"), // track utils too — lib.ts imports it.
+    ];
 
-    let js_needs_update = || -> Result<bool, Box<dyn std::error::Error>> {
-        Ok(ts_file.metadata()?.modified()? > js_file.metadata()?.modified()?)
-    }()
-    .unwrap_or(true);
+    // Rerun if any TS source or generated JS changes.
+    for (ts, js) in bundles {
+        let ts_path = workspace_root.join(ts);
+        println!("cargo:rerun-if-changed={}", ts_path.display());
+        if *js != "/dev/null" {
+            println!(
+                "cargo:rerun-if-changed={}",
+                workspace_root.join(js).display()
+            );
+        }
+    }
 
-    if js_needs_update {
+    let needs_update = |ts: &Path, js: &Path| -> bool {
+        (|| -> Result<bool, Box<dyn std::error::Error>> {
+            // If any TS file in the bundle is newer than the output, rebuild.
+            let ts_mtime = ts.metadata()?.modified()?;
+            let utils_mtime = workspace_root
+                .join("ts/utils.ts")
+                .metadata()
+                .and_then(|m| m.modified())
+                .ok();
+            let js_mtime = js.metadata()?.modified()?;
+            if ts_mtime > js_mtime {
+                return Ok(true);
+            }
+            if let Some(u) = utils_mtime {
+                if u > js_mtime {
+                    return Ok(true);
+                }
+            }
+            Ok(false)
+        })()
+        .unwrap_or(true)
+    };
+
+    for (ts, js) in bundles {
+        if *js == "/dev/null" {
+            continue;
+        }
+        let ts_path: PathBuf = workspace_root.join(ts);
+        let js_path: PathBuf = workspace_root.join(js);
+        if !needs_update(&ts_path, &js_path) {
+            continue;
+        }
+
         let status = Command::new("npx")
             .args([
                 "esbuild",
-                "ts/lib.ts",
+                "--bundle",
                 "--target=es2020",
-                "--outfile=www/static/lib.js",
+                &format!("--outfile={}", js_path.display()),
+                &format!("{}", ts_path.display()),
             ])
             .current_dir(workspace_root)
             .status();
