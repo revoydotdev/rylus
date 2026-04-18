@@ -1011,7 +1011,10 @@ impl VideoEncoder {
             let codec_name = options.codec.ffmpeg_codec_name();
             let codec = ffi::avcodec_find_encoder_by_name(codec_name.as_ptr());
             if codec.is_null() {
-                return Err(enc_err!("Codec '{}' not found", codec_name.to_string_lossy()));
+                return Err(enc_err!(
+                    "Codec '{}' not found",
+                    codec_name.to_string_lossy()
+                ));
             }
 
             let c = ffi::avcodec_alloc_context3(codec);
@@ -1175,9 +1178,10 @@ impl VideoEncoder {
                 return Err(enc_err!("Frame not initialized"));
             }
 
-            let pts = self.pending_pts.take().unwrap_or_else(|| {
-                (Instant::now() - self.start_time).as_millis() as i64
-            });
+            let pts = self
+                .pending_pts
+                .take()
+                .unwrap_or_else(|| (Instant::now() - self.start_time).as_millis() as i64);
             (*self.frame).pts = pts;
 
             let ret = ffi::avcodec_send_frame(self.codec_ctx, self.frame);
@@ -1556,22 +1560,16 @@ mod tests {
 
     #[test]
     fn pending_pts_overrides_auto_pts() {
-        let mut enc = VideoEncoder::new(
-            64, 64, 64, 64,
-            move |_| {},
-            EncoderOptions::default(),
-        ).unwrap();
+        let mut enc =
+            VideoEncoder::new(64, 64, 64, 64, move |_| {}, EncoderOptions::default()).unwrap();
         enc.set_next_pts(999);
         assert_eq!(enc.pending_pts, Some(999));
     }
 
     #[test]
     fn pending_pts_none_uses_auto() {
-        let enc = VideoEncoder::new(
-            64, 64, 64, 64,
-            move |_| {},
-            EncoderOptions::default(),
-        ).unwrap();
+        let enc =
+            VideoEncoder::new(64, 64, 64, 64, move |_| {}, EncoderOptions::default()).unwrap();
         assert!(enc.pending_pts.is_none());
     }
 
@@ -1605,10 +1603,16 @@ mod tests {
     #[test]
     fn codec_serde_uppercase_format() {
         let json = serde_json::to_string(&Codec::H264).unwrap();
-        assert_eq!(json, "\"H264\"", "Codec::H264 should serialize as uppercase H264");
+        assert_eq!(
+            json, "\"H264\"",
+            "Codec::H264 should serialize as uppercase H264"
+        );
 
         let json = serde_json::to_string(&Codec::Hevc).unwrap();
-        assert_eq!(json, "\"HEVC\"", "Codec::Hevc should serialize as uppercase HEVC");
+        assert_eq!(
+            json, "\"HEVC\"",
+            "Codec::Hevc should serialize as uppercase HEVC"
+        );
 
         // Roundtrip from uppercase
         let h264: Codec = serde_json::from_str("\"H264\"").unwrap();
@@ -1628,7 +1632,10 @@ mod tests {
         let output = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         let out = output.clone();
         let result = VideoEncoder::new(
-            64, 64, 64, 64,
+            64,
+            64,
+            64,
+            64,
             move |data| {
                 out.lock().unwrap().extend_from_slice(data);
             },
@@ -1655,12 +1662,16 @@ mod tests {
         let output = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         let out = output.clone();
         let mut enc = VideoEncoder::new(
-            64, 64, 64, 64,
+            64,
+            64,
+            64,
+            64,
             move |data| {
                 out.lock().unwrap().extend_from_slice(data);
             },
             EncoderOptions::default(),
-        ).expect("encoder should init");
+        )
+        .expect("encoder should init");
 
         // Set pending PTS
         enc.set_next_pts(12345);
