@@ -57,7 +57,13 @@ impl Rylus {
         };
 
         let tls_config = match config.resolve_tls_mode() {
-            TlsMode::Disabled => None,
+            TlsMode::Disabled => {
+                warn!(
+                    "TLS is disabled: access codes and input events travel in cleartext. \
+                     Only use this on a fully trusted network. Re-enable with --tls-mode auto."
+                );
+                None
+            }
             TlsMode::Auto => {
                 let cert_dir = std::path::PathBuf::from("/tmp").join("rylus");
                 match crate::tls::load_or_generate_cert(
@@ -214,7 +220,7 @@ mod tests {
     #[test]
     fn rylus_tls_mode_resolved_from_config() {
         let config = Config::parse_from::<_, &str>(["rylus"]);
-        assert_eq!(config.resolve_tls_mode(), TlsMode::Disabled);
+        assert_eq!(config.resolve_tls_mode(), TlsMode::Auto);
     }
 
     #[test]

@@ -166,9 +166,10 @@ pub struct Config {
 impl Config {
     pub fn resolve_tls_mode(&self) -> TlsMode {
         match self.tls_mode.as_deref() {
-            Some("auto") => TlsMode::Auto,
+            Some("disabled") | Some("off") | Some("none") => TlsMode::Disabled,
             Some("certified") => TlsMode::Certified,
-            _ => TlsMode::Disabled,
+            Some("auto") | None => TlsMode::Auto,
+            _ => TlsMode::Auto,
         }
     }
 }
@@ -409,8 +410,16 @@ try_nvenc = false
     }
 
     #[test]
-    fn tls_mode_defaults_to_disabled() {
+    fn tls_mode_defaults_to_auto() {
+        // Default is now Auto — self-signed cert generated on first run.
+        // Users must explicitly pass --tls-mode disabled to opt out.
         let config = Config::parse_from::<_, &str>(["rylus"]);
+        assert_eq!(config.resolve_tls_mode(), TlsMode::Auto);
+    }
+
+    #[test]
+    fn tls_mode_explicit_disabled() {
+        let config = Config::parse_from(["rylus", "--tls-mode", "disabled"]);
         assert_eq!(config.resolve_tls_mode(), TlsMode::Disabled);
     }
 
@@ -427,9 +436,9 @@ try_nvenc = false
     }
 
     #[test]
-    fn tls_mode_unknown_falls_back_to_disabled() {
+    fn tls_mode_unknown_falls_back_to_auto() {
         let config = Config::parse_from(["rylus", "--tls-mode", "bogus"]);
-        assert_eq!(config.resolve_tls_mode(), TlsMode::Disabled);
+        assert_eq!(config.resolve_tls_mode(), TlsMode::Auto);
     }
 
     #[test]
