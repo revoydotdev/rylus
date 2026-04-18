@@ -55,9 +55,13 @@ impl MdnsPublisher {
 
         let daemon = ServiceDaemon::new().map_err(|e| MdnsError(e.to_string()))?;
 
+        // Append a short PID-derived suffix so two Rylus servers on the same
+        // host or two hosts with identical `hostname` don't collide on the
+        // `_rylus._tcp.local.` namespace.
+        let suffix = collision_suffix();
         let instance_name = match hostname {
-            Some(h) => format!("Rylus {h}"),
-            None => format!("Rylus {}", get_hostname()),
+            Some(h) => format!("Rylus {h} {suffix}"),
+            None => format!("Rylus {} {}", get_hostname(), suffix),
         };
 
         let host_name = format!("{}.local.", get_hostname());
@@ -115,6 +119,42 @@ fn get_hostname() -> String {
     hostname::get()
         .map(|h| h.to_string_lossy().to_string())
         .unwrap_or_else(|_| "unknown".to_string())
+}
+
+/// 4-character lowercase-alphanumeric suffix derived from PID + a random
+/// nibble. Stable for the lifetime of the process, so clients can re-resolve
+/// after a reconnect, but unique enough to survive a collision with another
+/// Rylus instance on the same LAN.
+fn collision_suffix() -> String {
+    use std::sync::atomic::{AtomicU32, Ordering};
+    static CACHED: AtomicU32 = AtomicU32::new(0);
+    let existing = CACHED.load(Ordering::Relaxed);
+    if existing != 0 {
+        return format_suffix(existing);
+    }
+    // PID keeps the suffix stable for this server's lifetime. Mix in a few
+    // bits from the process start time to reduce reuse after PID wrap-around.
+    let pid = std::process::id();
+    let jitter = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.subsec_nanos())
+        .unwrap_or(0);
+    let mixed = pid.wrapping_mul(0x9E37_79B1).wrapping_add(jitter) | 1;
+    CACHED.store(mixed, Ordering::Relaxed);
+    format_suffix(mixed)
+}
+
+fn format_suffix(mixed: u32) -> String {
+    // 4 base-36 chars gives ~1.6M distinct values — plenty for LAN uniqueness.
+    let mut n = mixed;
+    let mut out = String::with_capacity(4);
+    for _ in 0..4 {
+        let d = (n % 36) as u8;
+        let c = if d < 10 { b'0' + d } else { b'a' + (d - 10) };
+        out.push(c as char);
+        n /= 36;
+    }
+    out
 }
 
 #[cfg(test)]
@@ -260,5 +300,29 @@ mod tests {
     fn get_hostname_returns_nonempty() {
         let hostname = get_hostname();
         assert!(!hostname.is_empty(), "Hostname should not be empty");
+    }
+
+    #[test]
+    fn collision_suffix_is_four_base36_chars() {
+        let s = collision_suffix();
+        assert_eq!(s.len(), 4);
+        assert!(
+            s.chars()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit()),
+            "suffix must be lowercase base-36: got {s}"
+        );
+    }
+
+    #[test]
+    fn collision_suffix_is_stable_across_calls() {
+        let a = collision_suffix();
+        let b = collision_suffix();
+        assert_eq!(a, b, "suffix must be stable for the life of the process");
+    }
+
+    #[test]
+    fn format_suffix_various_inputs() {
+        assert_eq!(format_suffix(0).len(), 4);
+        assert_eq!(format_suffix(u32::MAX).len(), 4);
     }
 }
