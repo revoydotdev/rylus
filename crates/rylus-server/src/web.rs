@@ -47,6 +47,13 @@ pub enum TlsOrTcp {
 
 /// A stream that is either TLS-wrapped or plain TCP.
 /// Implements AsyncRead + AsyncWrite by delegating to the inner stream.
+///
+/// The TLS variant is intentionally large (~1.2 KB of rustls session state).
+/// Boxing it would add a pointer indirection on every poll_read/write, which
+/// is hot-path in the stream loop — and we only hold one of these per live
+/// connection, so the per-enum size penalty is paid at most `num_clients`
+/// times.
+#[allow(clippy::large_enum_variant)]
 pub enum TlsOrTcpStream {
     Tls(tokio_rustls::TlsStream<tokio::net::TcpStream>),
     Tcp(tokio::net::TcpStream),
@@ -97,6 +104,8 @@ pub const ACCESS_HTML: &str = std::include_str!("../../../www/static/access_code
 pub const STYLE_CSS: &str = std::include_str!("../../../www/static/style.css");
 pub const LIB_JS: &str = std::include_str!("../../../www/static/lib.js");
 pub const SETTINGS_HTML: &str = std::include_str!("../../../www/static/settings.html");
+pub const SW_JS: &str = std::include_str!("../../../www/static/sw.js");
+pub const MANIFEST: &str = std::include_str!("../../../www/static/manifest.webmanifest");
 
 /// Maximum failed auth attempts per IP before rate limiting kicks in.
 const MAX_FAILED_ATTEMPTS: u32 = 5;
@@ -293,17 +302,47 @@ async fn serve(
 ) -> Result<Response<BoxBody<Bytes, Infallible>>, hyper::Error> {
     debug!("Got request: {:?}", req);
 
-    // Settings page and config API don't require access_code auth
+    // Settings page and config API require access-code auth when one is
+    // configured — otherwise an unauthenticated LAN peer could enumerate
+    // capturables, read the access code itself, or rewrite the config.
+    let preauthed = if context.web_config.access_code_hash.is_some() {
+        extract_session_token(&req)
+            .map(|t| context.session_store.is_valid(&t))
+            .unwrap_or(false)
+    } else {
+        true
+    };
     match (req.method(), req.uri().path()) {
         (&Method::GET, "/settings") => {
+            if !preauthed {
+                return Ok(boxed_response(
+                    StatusCode::UNAUTHORIZED,
+                    "text/plain; charset=utf-8",
+                    "unauthorized",
+                ));
+            }
             return Ok(
                 response_from_str(SETTINGS_HTML, "text/html; charset=utf-8").map(|r| r.boxed())
             );
         }
         (&Method::GET, "/api/config") => {
+            if !preauthed {
+                return Ok(boxed_response(
+                    StatusCode::UNAUTHORIZED,
+                    "text/plain; charset=utf-8",
+                    "unauthorized",
+                ));
+            }
             return handle_get_config();
         }
         (&Method::POST, "/api/config") => {
+            if !preauthed {
+                return Ok(boxed_response(
+                    StatusCode::UNAUTHORIZED,
+                    "text/plain; charset=utf-8",
+                    "unauthorized",
+                ));
+            }
             return handle_post_config(req).await;
         }
         _ => {}
@@ -438,12 +477,11 @@ async fn serve(
             tokio::spawn(async move {
                 match on_upgrade.await {
                     Ok(upgraded) => {
-                        let (sender, receiver) =
-                            rylus_websocket_channel_from_hyper_upgrade(
-                                upgraded,
-                                semaphore_websocket_shutdown,
-                            )
-                            .await;
+                        let (sender, receiver) = rylus_websocket_channel_from_hyper_upgrade(
+                            upgraded,
+                            semaphore_websocket_shutdown,
+                        )
+                        .await;
                         std::thread::spawn(move || {
                             let client = RylusClientHandler::new(
                                 sender,
@@ -490,6 +528,17 @@ async fn serve(
             "text/javascript; charset=utf-8",
         )
         .await
+        .map(|r| r.boxed())),
+        // Service worker and manifest are pre-auth on purpose: the browser fetches
+        // them before the user hits the access-code form, and they must be served
+        // from the root scope for the PWA install flow to work.
+        "/sw.js" => {
+            Ok(response_from_str(SW_JS, "text/javascript; charset=utf-8").map(|r| r.boxed()))
+        }
+        "/manifest.webmanifest" => Ok(response_from_str(
+            MANIFEST,
+            "application/manifest+json; charset=utf-8",
+        )
         .map(|r| r.boxed())),
         _ => Ok(response_not_found().map(|r| r.boxed())),
     }
@@ -714,7 +763,13 @@ pub fn run(
         session_store: SessionStore::new(),
     };
     std::thread::spawn(move || {
-        run_server(context, sender_ui, sender_startup, notify_shutdown, tls_config)
+        run_server(
+            context,
+            sender_ui,
+            sender_startup,
+            notify_shutdown,
+            tls_config,
+        )
     })
 }
 
@@ -777,7 +832,9 @@ async fn run_server(
             Some(config) => {
                 let acceptor = TlsAcceptor::from(config.clone());
                 match acceptor.accept(tcp).await {
-                    Ok(tls_stream) => TokioIo::new(TlsOrTcpStream::Tls(tokio_rustls::TlsStream::Server(tls_stream))),
+                    Ok(tls_stream) => TokioIo::new(TlsOrTcpStream::Tls(
+                        tokio_rustls::TlsStream::Server(tls_stream),
+                    )),
                     Err(err) => {
                         warn!("TLS accept failed: {err}");
                         continue;
