@@ -126,21 +126,32 @@ impl RateLimiter {
         }
     }
 
-    /// Returns true if the IP is currently locked out.
-    fn is_locked_out(&self, ip: &IpAddr) -> bool {
+    /// Returns `Some(seconds_remaining)` if the IP is currently locked out,
+    /// `None` otherwise. The seconds value is how long the tablet UI should
+    /// display its countdown before re-enabling the code field.
+    fn lockout_remaining(&self, ip: &IpAddr) -> Option<u64> {
         let mut attempts = self.attempts.lock();
         let now = Instant::now();
         if let Some(timestamps) = attempts.get_mut(ip) {
-            // Remove attempts outside the window
             timestamps.retain(|t| now.duration_since(*t) < RATE_LIMIT_WINDOW);
             if timestamps.len() as u32 >= MAX_FAILED_ATTEMPTS {
-                // Check if the most recent attempt is within lockout duration
                 if let Some(last) = timestamps.last() {
-                    return now.duration_since(*last) < LOCKOUT_DURATION;
+                    let since = now.duration_since(*last);
+                    if since < LOCKOUT_DURATION {
+                        return Some((LOCKOUT_DURATION - since).as_secs().max(1));
+                    }
                 }
             }
         }
-        false
+        None
+    }
+
+    /// Returns true if the IP is currently locked out. Retained for test
+    /// coverage; production uses [`Self::lockout_remaining`] so the tablet
+    /// can show a countdown.
+    #[cfg(test)]
+    fn is_locked_out(&self, ip: &IpAddr) -> bool {
+        self.lockout_remaining(ip).is_some()
     }
 
     /// Record a failed attempt from this IP.
@@ -167,6 +178,13 @@ impl SessionStore {
         Self {
             tokens: Mutex::new(HashMap::new()),
         }
+    }
+
+    /// Invalidate every active session. Called when the access code is
+    /// rotated via the settings API so previously-authenticated tablets are
+    /// forced to re-authenticate with the new code.
+    fn clear(&self) {
+        self.tokens.lock().clear();
     }
 
     /// Create a new session, returning the token.
@@ -253,6 +271,33 @@ async fn response_from_path_or_default(
         },
         None => response_from_str(default, content_type),
     }
+}
+
+/// Compare a WebSocket upgrade's Origin and Host headers. Returns true when
+/// there is no Origin header (non-browser clients) or when Origin's
+/// authority matches Host. A mismatched Origin is refused.
+fn ws_origin_matches_host(req: &Request<Incoming>) -> bool {
+    let origin = match req.headers().get("origin").and_then(|h| h.to_str().ok()) {
+        Some(o) if !o.is_empty() => o,
+        // No Origin header: accept (non-browser clients, same-origin
+        // environments where the browser omits the header).
+        _ => return true,
+    };
+    let host = req
+        .headers()
+        .get("host")
+        .and_then(|h| h.to_str().ok())
+        .unwrap_or("");
+    // Origin looks like "scheme://host[:port]"; strip the scheme and
+    // optional trailing path.
+    let origin_authority = origin
+        .split_once("://")
+        .map(|(_, rest)| rest)
+        .unwrap_or(origin)
+        .split('/')
+        .next()
+        .unwrap_or("");
+    !host.is_empty() && !origin_authority.is_empty() && origin_authority == host
 }
 
 /// Extract the session token from the Cookie header.
@@ -343,22 +388,29 @@ async fn serve(
                     "unauthorized",
                 ));
             }
-            return handle_post_config(req).await;
+            return handle_post_config(req, &context.session_store).await;
         }
         _ => {}
     }
 
-    // Handle POST /auth — access code submission
+    // Handle POST /auth — access code submission. Failure paths redirect
+    // back to / with ?auth_error=… so the client-side renderer in
+    // access_code.html can show an inline, countdown-aware error and the
+    // browser back button returns to a clean login screen.
     if req.method() == Method::POST && req.uri().path() == "/auth" {
         if let Some(ref access_code_hash) = context.web_config.access_code_hash {
             // Check rate limit
-            if context.rate_limiter.is_locked_out(&addr.ip()) {
-                warn!(address = ?addr, "Auth attempt rejected: rate limited.");
-                return Ok(boxed_response(
-                    StatusCode::TOO_MANY_REQUESTS,
-                    "text/html; charset=utf-8",
-                    "Too many failed attempts. Please wait and try again.",
-                ));
+            if let Some(retry) = context.rate_limiter.lockout_remaining(&addr.ip()) {
+                warn!(address = ?addr, retry_s = retry, "Auth attempt rejected: rate limited.");
+                return Ok(Response::builder()
+                    .status(StatusCode::SEE_OTHER)
+                    .header(
+                        "location",
+                        format!("/?auth_error=rate_limited&retry={retry}"),
+                    )
+                    .header("retry-after", retry.to_string())
+                    .body(Full::new(Bytes::from("Redirecting...")).boxed())
+                    .expect("redirect response builder should not fail"));
             }
 
             let body = match req.collect().await.map(|c| c.to_bytes()) {
@@ -377,7 +429,7 @@ async fn serve(
                 url::form_urlencoded::parse(&body).into_owned().collect();
 
             if let Some(code) = params.get("access_code") {
-                if verify_access_code(code, access_code_hash) {
+                if !code.is_empty() && verify_access_code(code, access_code_hash) {
                     let token = context.session_store.create_session();
                     debug!(address = ?addr, "Client authenticated via POST.");
                     return Ok(Response::builder()
@@ -394,16 +446,19 @@ async fn serve(
                 }
             }
 
-            // Failed auth
+            // Failed auth: record and redirect with a typed error the login
+            // page can render inline.
             context.rate_limiter.record_failure(&addr.ip());
             warn!(address = ?addr, "Failed authentication attempt.");
-            return Ok(response_from_path_or_default(
-                context.web_config.custom_access_html.as_ref(),
-                ACCESS_HTML,
-                "text/html; charset=utf-8",
-            )
-            .await
-            .map(|r| r.boxed()));
+            let location = match context.rate_limiter.lockout_remaining(&addr.ip()) {
+                Some(retry) => format!("/?auth_error=rate_limited&retry={retry}"),
+                None => "/?auth_error=invalid".to_string(),
+            };
+            return Ok(Response::builder()
+                .status(StatusCode::SEE_OTHER)
+                .header("location", location)
+                .body(Full::new(Bytes::from("Redirecting...")).boxed())
+                .expect("redirect response builder should not fail"));
         }
     }
 
@@ -468,6 +523,26 @@ async fn serve(
                     .status(StatusCode::UNAUTHORIZED)
                     .body("unauthorized".to_string().boxed())
                     .expect("unauthorized response builder should not fail"));
+            }
+
+            // Origin check: reject upgrades where the browser-supplied Origin
+            // doesn't match this server's Host. Prevents a different
+            // LAN-reachable origin from opening a WebSocket against us just
+            // because the user happens to have authenticated elsewhere.
+            // Same-origin browsers send matching Origin/Host; curl and other
+            // non-browser clients typically send no Origin header, which we
+            // intentionally allow for scripting and mDNS discovery.
+            if !ws_origin_matches_host(&req) {
+                warn!(
+                    address = ?addr,
+                    origin = ?req.headers().get("origin"),
+                    host = ?req.headers().get("host"),
+                    "Rejecting WebSocket upgrade: Origin does not match Host",
+                );
+                return Ok(Response::builder()
+                    .status(StatusCode::FORBIDDEN)
+                    .body("forbidden origin".to_string().boxed())
+                    .expect("forbidden response builder should not fail"));
             }
 
             let on_upgrade = hyper::upgrade::on(req);
@@ -596,6 +671,7 @@ fn handle_get_config() -> Result<Response<BoxBody<Bytes, Infallible>>, hyper::Er
 
 async fn handle_post_config(
     req: Request<Incoming>,
+    session_store: &SessionStore,
 ) -> Result<Response<BoxBody<Bytes, Infallible>>, hyper::Error> {
     use clap::Parser as _;
     let body = req.collect().await.map(|c| c.to_bytes());
@@ -658,9 +734,16 @@ async fn handle_post_config(
     if let Some(port) = update.web_port {
         config.web_port = port;
     }
-    // access_code: absent = don't change, null = clear, string = set
+    // access_code: absent = don't change, null = clear, string = set.
+    // Rotating the code invalidates every existing session so connected
+    // tablets are forced to re-authenticate with the new code.
     if let Some(code) = update.access_code {
+        let rotated = config.access_code != code;
         config.access_code = code;
+        if rotated {
+            info!("Access code rotated; invalidating all active sessions.");
+            session_store.clear();
+        }
     }
 
     #[cfg(target_os = "linux")]
