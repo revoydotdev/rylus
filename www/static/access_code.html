@@ -1,19 +1,86 @@
 <!DOCTYPE html>
 <html lang="en">
-	<head>
-		<meta name="apple-mobile-web-app-capable" content="yes" />
-		<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-		<meta name="mobile-web-app-capable" content="yes">
-		<title>Rylus</title>
-		<link rel="stylesheet" href="style.css">
-	</head>
-	<body>
-		<div class="container">
-			<form method="post" action="/auth">
-				<label for="access_code">Access code:</label><br>
-				<input type="password" id="access_code" name="access_code" autocomplete="current-password"><br>
-				<input type="submit" value="Login">
-			</form>
-		</div>
-	</body>
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="color-scheme" content="dark light">
+    <title>Rylus — Access Code</title>
+    <link rel="stylesheet" href="style.css">
+    <link rel="manifest" href="manifest.webmanifest">
+</head>
+<body class="auth-screen">
+    <main class="auth-main">
+        <section class="auth-card" aria-labelledby="auth-title">
+            <h1 id="auth-title" class="auth-title">Rylus</h1>
+            <p class="auth-sub">Enter the access code shown on your computer.</p>
+
+            <div id="auth-error" class="auth-error" role="alert" aria-live="polite" hidden></div>
+
+            <form method="post" action="/auth" class="auth-form" autocomplete="off">
+                <label class="auth-label" for="access_code">Access code</label>
+                <input
+                    class="auth-input"
+                    type="password"
+                    id="access_code"
+                    name="access_code"
+                    autocomplete="current-password"
+                    autocapitalize="off"
+                    autocorrect="off"
+                    spellcheck="false"
+                    inputmode="text"
+                    required
+                    aria-describedby="auth-hint"
+                >
+                <small id="auth-hint" class="auth-hint">Hashed on the server — never stored in plaintext.</small>
+                <button class="auth-submit" type="submit">Unlock</button>
+            </form>
+        </section>
+    </main>
+    <script>
+        // Read ?auth_error=... from the URL. The server redirects here with
+        // auth_error=invalid after a wrong code, and auth_error=rate_limited
+        // with an optional retry=seconds after the IP is locked out. Strip
+        // the query param after rendering so a reload doesn't keep showing
+        // the error.
+        (function () {
+            var params = new URLSearchParams(location.search);
+            var err = params.get("auth_error");
+            if (!err) return;
+            var box = document.getElementById("auth-error");
+            var input = document.getElementById("access_code");
+            if (err === "rate_limited") {
+                var retryRaw = parseInt(params.get("retry") || "30", 10);
+                var retry = isFinite(retryRaw) && retryRaw > 0 ? retryRaw : 30;
+                box.textContent = "Too many failed attempts. Try again in " + retry + "s.";
+                box.hidden = false;
+                input.disabled = true;
+                var tick = setInterval(function () {
+                    retry--;
+                    if (retry <= 0) {
+                        clearInterval(tick);
+                        box.textContent = "You can retry now.";
+                        input.disabled = false;
+                        input.focus();
+                        return;
+                    }
+                    box.textContent = "Too many failed attempts. Try again in " + retry + "s.";
+                }, 1000);
+            } else if (err === "invalid") {
+                box.textContent = "Incorrect access code. Please try again.";
+                box.hidden = false;
+                input.focus();
+            } else {
+                box.textContent = "Authentication failed.";
+                box.hidden = false;
+            }
+            if (history.replaceState) {
+                var cleaned = location.pathname;
+                history.replaceState({}, "", cleaned);
+            }
+        })();
+    </script>
+</body>
 </html>

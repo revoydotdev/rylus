@@ -120,9 +120,50 @@ input[type='text'], input[type='number'] {
     padding: 0.35em 0.6em;
 }
 
-input[type='range']::-webkit-slider-runnable-track,
-input[type='range']::-moz-range-track {
+input[type='range'] {
+    -webkit-appearance: none;
+    appearance: none;
+    background: transparent;
+    width: 100%;
+}
+
+input[type='range']::-webkit-slider-runnable-track {
+    height: 4px;
+    border-radius: 999px;
     background-color: var(--rylus-accent);
+}
+
+input[type='range']::-moz-range-track {
+    height: 4px;
+    border-radius: 999px;
+    background-color: var(--rylus-accent);
+}
+
+input[type='range']::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 16px;
+    height: 16px;
+    margin-top: -6px;
+    border-radius: 50%;
+    background: var(--background-color-1);
+    border: 2px solid var(--rylus-accent);
+    cursor: pointer;
+    transition: background var(--rylus-transition), border-color var(--rylus-transition);
+}
+
+input[type='range']::-moz-range-thumb {
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background: var(--background-color-1);
+    border: 2px solid var(--rylus-accent);
+    cursor: pointer;
+}
+
+input[type='range']:hover::-webkit-slider-thumb,
+input[type='range']:focus-visible::-webkit-slider-thumb {
+    background: var(--rylus-accent);
 }
 
 button, select {
@@ -368,7 +409,10 @@ label input:disabled + span {
     height: 10px;
     border-radius: 50%;
     background: transparent;
-    box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.35);
+    /* A neutral outline tokenized against --color so the pip is visible in
+     * both light and dark themes (dark bg: lighter ring, light bg: darker
+     * ring via CSS alpha against the text color). */
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--color) 40%, transparent);
     z-index: 10;
     pointer-events: none;
     transition: background var(--rylus-transition);
@@ -437,4 +481,247 @@ label input:disabled + span {
         opacity: 0;
         animation: none;
     }
+}
+
+/* ---------------------------------------------------------------------------
+ * Reconnect banner (top-of-viewport), shown when the WebSocket drops. Uses
+ * the warn token and respects safe-area insets so it doesn't overlap the
+ * iPad/iPhone notch.
+ * ------------------------------------------------------------------------ */
+
+.rylus-reconnect-banner {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    padding: calc(max(env(safe-area-inset-top), 0px) + 0.75em) 1em 0.75em 1em;
+    background: var(--rylus-warn);
+    color: #1a1a1a;
+    font-family: var(--rylus-font-ui);
+    font-weight: 500;
+    font-size: 0.95em;
+    line-height: 1.4;
+    text-align: center;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 1em;
+    flex-wrap: wrap;
+    z-index: 9999;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+}
+
+.rylus-reconnect-banner.failed {
+    background: var(--rylus-error);
+    color: #ffffff;
+}
+
+.rylus-reconnect-banner .rylus-reconnect-btn {
+    font: inherit;
+    font-weight: 600;
+    padding: 0.35em 0.9em;
+    cursor: pointer;
+    border: 1px solid rgba(0, 0, 0, 0.25);
+    background: rgba(255, 255, 255, 0.9);
+    color: #1a1a1a;
+    border-radius: var(--rylus-radius-sm);
+    transition: background var(--rylus-transition), border-color var(--rylus-transition);
+}
+
+.rylus-reconnect-banner.failed .rylus-reconnect-btn {
+    background: #ffffff;
+    color: var(--rylus-error);
+    border-color: rgba(0, 0, 0, 0.3);
+}
+
+.rylus-reconnect-banner .rylus-reconnect-btn:hover,
+.rylus-reconnect-banner .rylus-reconnect-btn:focus-visible {
+    background: #ffffff;
+    border-color: rgba(0, 0, 0, 0.45);
+}
+
+.rylus-reconnect-dismiss {
+    font: inherit;
+    background: transparent;
+    border: none;
+    color: inherit;
+    opacity: 0.7;
+    cursor: pointer;
+    padding: 0.1em 0.3em;
+    border-radius: var(--rylus-radius-sm);
+    line-height: 1;
+}
+
+.rylus-reconnect-dismiss:hover,
+.rylus-reconnect-dismiss:focus-visible {
+    opacity: 1;
+}
+
+/* ---------------------------------------------------------------------------
+ * Tablet bottom-sheet settings panel (480–1024px). DESIGN.md specifies a
+ * bottom sheet on tablets instead of the desktop 16em sidebar so the video
+ * surface is not permanently cropped. Desktop (>1024px) keeps the sidebar;
+ * phone (<480px) drops to the full-width top bar further below.
+ * ------------------------------------------------------------------------ */
+
+@media (min-width: 481px) and (max-width: 1024px) {
+    #settings {
+        width: 100%;
+        right: 0;
+        left: 0;
+        top: auto;
+        bottom: 0;
+        max-height: 55vh;
+        padding: 1em 1em calc(1em + env(safe-area-inset-bottom)) 1em;
+        border-left: 0;
+        border-top: 1px solid var(--border-color);
+        border-top-left-radius: var(--rylus-radius-md);
+        border-top-right-radius: var(--rylus-radius-md);
+        box-shadow: 0 -8px 24px rgba(0, 0, 0, 0.25);
+        overflow-y: auto;
+    }
+
+    #settings.hide, #settings.vanish {
+        transform: translateY(100%);
+    }
+
+    #settings.hide.lefty, #settings.vanish.lefty {
+        transform: translateY(100%);
+    }
+
+    #handle {
+        position: absolute;
+        top: -1em;
+        left: 50%;
+        right: auto;
+        transform: translateX(-50%);
+        width: 3em;
+        height: 1em;
+        border-radius: var(--rylus-radius-sm) var(--rylus-radius-sm) 0 0;
+        padding: 0.1em 0;
+        text-align: center;
+        font-size: 100%;
+    }
+
+    .lefty #handle {
+        left: 50%;
+        right: auto;
+        transform: translateX(-50%);
+        border-radius: var(--rylus-radius-sm) var(--rylus-radius-sm) 0 0;
+    }
+}
+
+/* ---------------------------------------------------------------------------
+ * Authenticated login (access_code.html). Served standalone before the
+ * tablet UI is loaded. Uses the same tokens as the main client.
+ * ------------------------------------------------------------------------ */
+
+body.auth-screen {
+    display: block;
+    overflow: auto;
+}
+
+.auth-main {
+    min-height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 2em 1em;
+    box-sizing: border-box;
+    background: var(--background-color-2);
+}
+
+.auth-card {
+    width: 100%;
+    max-width: 380px;
+    padding: 2em 1.75em;
+    background: var(--background-color-1);
+    border: 1px solid var(--border-color);
+    border-radius: var(--rylus-radius-md);
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.25);
+    box-sizing: border-box;
+}
+
+.auth-title {
+    margin: 0 0 0.25em 0;
+    font-family: var(--rylus-font-ui);
+    font-weight: 700;
+    font-size: 1.75rem;
+    letter-spacing: -0.02em;
+    color: var(--rylus-accent);
+}
+
+.auth-sub {
+    margin: 0 0 1.5em 0;
+    color: var(--color-muted);
+    font-size: 0.95em;
+}
+
+.auth-error {
+    margin: 0 0 1em 0;
+    padding: 0.6em 0.8em;
+    border-left: 3px solid var(--rylus-error);
+    border-radius: var(--rylus-radius-sm);
+    background: color-mix(in srgb, var(--rylus-error) 12%, transparent);
+    color: var(--color);
+    font-size: 0.9em;
+}
+
+.auth-form {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5em;
+}
+
+.auth-label {
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--color);
+    margin-bottom: 0.25em;
+}
+
+.auth-input {
+    font: inherit;
+    font-size: 15px;
+    padding: 0.65em 0.8em;
+    color: var(--color);
+    background: var(--background-color-2);
+    border: 1px solid var(--border-color);
+    border-radius: var(--rylus-radius-sm);
+    transition: border-color var(--rylus-transition);
+}
+
+.auth-input:focus {
+    outline: none;
+    border-color: var(--rylus-accent);
+}
+
+.auth-input:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+}
+
+.auth-hint {
+    font-size: 12px;
+    color: var(--color-muted);
+    margin-bottom: 0.5em;
+}
+
+.auth-submit {
+    margin-top: 0.5em;
+    padding: 0.75em 1em;
+    font: inherit;
+    font-weight: 600;
+    color: #ffffff;
+    background: var(--rylus-accent);
+    border: 1px solid var(--rylus-accent);
+    border-radius: var(--rylus-radius-sm);
+    cursor: pointer;
+    transition: background var(--rylus-transition), border-color var(--rylus-transition);
+}
+
+.auth-submit:hover,
+.auth-submit:focus-visible {
+    background: var(--rylus-accent-hover);
+    border-color: var(--rylus-accent-hover);
 }

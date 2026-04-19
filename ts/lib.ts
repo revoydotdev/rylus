@@ -310,6 +310,11 @@ class Settings {
     send_server_config() {
         if (this.capturable_select.options.length === 0) {
             log(LogLevel.DEBUG, "No capturables available, skipping config send.");
+            showToast(
+                "No screens or windows available yet. Tap \"Refresh List\" once the capture source is ready.",
+                "info",
+                3500,
+            );
             return;
         }
         let config = new Object(null);
@@ -462,8 +467,19 @@ class Settings {
             this.capturable_select.value = "";
 
         // Auto-send config now that capturables are available
-        if (window_names.length > 0)
+        if (window_names.length > 0) {
             this.send_server_config();
+        } else {
+            // Surface empty-state guidance instead of silently leaving the
+            // dropdown blank. Covers Wayland portal waiting for the user to
+            // approve the request, and capture backends that haven't
+            // enumerated windows yet.
+            showToast(
+                "No capture sources found. On Wayland, approve the screen-capture prompt on your computer, then tap \"Refresh List\".",
+                "info",
+                5000,
+            );
+        }
     }
 
     toggle_energysaving(energysaving: boolean) {
@@ -495,6 +511,12 @@ class Settings {
 let settings: Settings;
 let debug_overlay: HTMLElement;
 let last_pointer_data: Object;
+
+// The currently-active Painter (if any). Exposed at module scope so the
+// reconnect handler can drop locally-drawn partial strokes when the
+// WebSocket goes down — without a reference the user would keep dragging
+// a visible line the server never received.
+let active_painter: Painter | null = null;
 
 // Palm rejection: kept at module scope so the 100ms suppression window
 // survives PointerHandler re-instantiation when the user toggles input
@@ -740,6 +762,17 @@ class Painter {
         }
     }
 
+    /// Discard every in-flight stroke and render state. Used on disconnect so
+    /// the user doesn't see the local canvas keep ghost-drawing after the
+    /// server stopped receiving events.
+    cancel_all() {
+        if (this.lines_active) this.lines_active.clear();
+        if (this.lines_old) this.lines_old.length = 0;
+        if (this.gl && this.initialized) {
+            this.gl.clear(this.gl.COLOR_BUFFER_BIT);
+        }
+    }
+
     appendEventToLine(event: PointerEvent) {
         let line = this.lines_active.get(event.pointerId);
         if (!line) {
@@ -819,8 +852,12 @@ class PointerHandler {
         video.onpointerover = (e) => this.onEvent(e, "pointerover");
 
         let painter: Painter;
-        if (!settings.checks.get("energysaving").checked)
+        if (!settings.checks.get("energysaving").checked) {
             painter = new Painter(canvas as HTMLCanvasElement);
+            active_painter = painter;
+        } else {
+            active_painter = null;
+        }
 
         if (painter && painter.initialized) {
             canvas.onpointerdown = (e) => { this.onEvent(e, "pointerdown"); painter.onstart(e); };
@@ -1281,10 +1318,21 @@ function init() {
                 document.exitFullscreen();
         }
     } else {
-        // if document.exitFullscreen is not present we are probably running on iOS/iPadOS.
-        // As input is broken in fullscreen mode on these, do not offer fullscreen in the first
-        // place.
-        toggle_fullscreen_btn.remove();
+        // No Fullscreen API — typically iOS/iPadOS Safari. Leave the button
+        // visible but disabled with a tooltip that tells the user to use
+        // "Add to Home Screen" instead. Removing it silently left iPad
+        // users staring at a missing control with no explanation.
+        toggle_fullscreen_btn.disabled = true;
+        toggle_fullscreen_btn.title =
+            "Fullscreen isn't supported in this browser. On iPadOS, use Safari's Share → Add to Home Screen.";
+        toggle_fullscreen_btn.setAttribute("aria-disabled", "true");
+        toggle_fullscreen_btn.onclick = () => {
+            showToast(
+                "Fullscreen isn't supported here. On iPad, use Safari's Share → Add to Home Screen.",
+                "info",
+                5000,
+            );
+        };
     }
 
     // Reconnection state machine
@@ -1331,14 +1379,28 @@ function init() {
     function show_reconnect_banner(delay_ms: number, attempt: number) {
         remove_reconnect_banner()
         let banner = document.createElement("div")
-        banner.style.cssText = "position:fixed;top:0;left:0;right:0;padding:1em;background:#d97706;color:white;text-align:center;z-index:9999;font-size:1.2em;display:flex;align-items:center;justify-content:center;gap:1em;"
+        banner.className = "rylus-reconnect-banner"
+        banner.setAttribute("role", "status")
+        banner.setAttribute("aria-live", "polite")
         let msg = document.createElement("span")
         let remaining = Math.ceil(delay_ms / 1000)
-        msg.textContent = "Reconnecting in " + remaining + "s... (attempt " + attempt + " of " + RECONNECT_MAX_ATTEMPTS + ")"
+        let render = () => {
+            msg.textContent =
+                "Connection lost — input paused. Reconnecting in " +
+                remaining +
+                "s (attempt " +
+                attempt +
+                " of " +
+                RECONNECT_MAX_ATTEMPTS +
+                ")."
+        }
+        render()
         banner.appendChild(msg)
         let btn = document.createElement("button")
-        btn.textContent = "Retry Now"
-        btn.style.cssText = "padding:0.3em 1em;cursor:pointer;border:none;background:white;color:#d97706;border-radius:4px;font-weight:bold;"
+        btn.type = "button"
+        btn.className = "rylus-reconnect-btn"
+        btn.textContent = "Retry now"
+        btn.setAttribute("aria-label", "Retry connecting now")
         btn.onclick = () => {
             remove_reconnect_banner()
             attempt_reconnect()
@@ -1350,16 +1412,42 @@ function init() {
         reconnect_countdown_timer = window.setInterval(() => {
             remaining--
             if (remaining < 1) remaining = 1
-            msg.textContent = "Reconnecting in " + remaining + "s... (attempt " + attempt + " of " + RECONNECT_MAX_ATTEMPTS + ")"
+            render()
         }, 1000)
     }
 
     function show_failed_banner() {
         remove_reconnect_banner()
         let banner = document.createElement("div")
-        banner.style.cssText = "position:fixed;top:0;left:0;right:0;padding:1em;background:red;color:white;text-align:center;cursor:pointer;z-index:9999;font-size:1.2em;"
-        banner.textContent = "Could not reconnect. Click to reload."
-        banner.onclick = () => location.reload()
+        banner.className = "rylus-reconnect-banner failed"
+        banner.setAttribute("role", "alert")
+        let msg = document.createElement("span")
+        msg.textContent = "Could not reconnect after several attempts."
+        banner.appendChild(msg)
+        let reload_btn = document.createElement("button")
+        reload_btn.type = "button"
+        reload_btn.className = "rylus-reconnect-btn"
+        reload_btn.textContent = "Reload"
+        reload_btn.onclick = () => location.reload()
+        banner.appendChild(reload_btn)
+        let retry_btn = document.createElement("button")
+        retry_btn.type = "button"
+        retry_btn.className = "rylus-reconnect-btn"
+        retry_btn.textContent = "Try again"
+        retry_btn.onclick = () => {
+            remove_reconnect_banner()
+            is_reconnecting = true
+            reconnect_attempt = 0
+            schedule_reconnect()
+        }
+        banner.appendChild(retry_btn)
+        let dismiss = document.createElement("button")
+        dismiss.type = "button"
+        dismiss.className = "rylus-reconnect-dismiss"
+        dismiss.textContent = "✕"
+        dismiss.setAttribute("aria-label", "Dismiss reconnect banner")
+        dismiss.onclick = () => remove_reconnect_banner()
+        banner.appendChild(dismiss)
         document.body.appendChild(banner)
         reconnect_banner = banner
     }
@@ -1387,8 +1475,11 @@ function init() {
     function attempt_reconnect() {
         remove_reconnect_banner()
         let banner = document.createElement("div")
-        banner.style.cssText = "position:fixed;top:0;left:0;right:0;padding:1em;background:#d97706;color:white;text-align:center;z-index:9999;font-size:1.2em;"
-        banner.textContent = "Reconnecting... (attempt " + reconnect_attempt + " of " + RECONNECT_MAX_ATTEMPTS + ")"
+        banner.className = "rylus-reconnect-banner"
+        banner.setAttribute("role", "status")
+        banner.setAttribute("aria-live", "polite")
+        banner.textContent =
+            "Reconnecting… (attempt " + reconnect_attempt + " of " + RECONNECT_MAX_ATTEMPTS + ")"
         document.body.appendChild(banner)
         reconnect_banner = banner
 
@@ -1453,6 +1544,12 @@ function init() {
 
     let handle_disconnect = () => {
         stop_heartbeat()
+        // Drop any locally-drawn partial strokes — the server never saw the
+        // tail of them, so keeping them on the canvas would create a false
+        // sense that the stroke had been delivered.
+        if (active_painter) {
+            try { active_painter.cancel_all() } catch (_e) {}
+        }
         if (is_reconnecting) return
         is_reconnecting = true
         reconnect_attempt = 0
