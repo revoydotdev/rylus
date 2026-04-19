@@ -6,8 +6,12 @@
 // side doesn't blank the page. We intentionally DO NOT try to cache /ws or
 // video frames — streaming state must always be live.
 
-const CACHE_NAME = "rylus-shell-v1";
-const SHELL = ["/", "/style.css", "/lib.js", "/manifest.webmanifest"];
+const CACHE_NAME = "rylus-shell-v2";
+// Static assets only. `/` is deliberately excluded — it returns either the
+// authenticated tablet HTML or the access-code login depending on session
+// state, and caching whichever the SW saw first would leak stale auth state
+// on reload.
+const SHELL = ["/style.css", "/lib.js", "/manifest.webmanifest"];
 
 self.addEventListener("install", (event: any) => {
     event.waitUntil(
@@ -37,11 +41,16 @@ self.addEventListener("fetch", (event: any) => {
     // Don't cache POSTs or non-GET verbs.
     if (req.method !== "GET") return;
 
+    // `/` is auth-dependent and must never be cached. Let it go straight to
+    // the network; the browser will naturally display the access-code page
+    // when offline.
+    if (url.pathname === "/") return;
+
     event.respondWith(
         (async () => {
             try {
                 const live = await fetch(req);
-                if (live.ok && (url.pathname === "/" || SHELL.includes(url.pathname))) {
+                if (live.ok && SHELL.includes(url.pathname)) {
                     const copy = live.clone();
                     caches.open(CACHE_NAME).then((c) => c.put(req, copy)).catch(() => {});
                 }
