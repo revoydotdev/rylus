@@ -124,7 +124,14 @@ struct RylusApp {
 
     // Original config for persistence
     config: Config,
+
+    // Access-code visibility toggle for the GUI text field.
+    show_access_code: bool,
 }
+
+// Maximum number of log lines retained in the GUI log viewer before the oldest
+// are dropped. Keeps memory bounded on long-running sessions.
+const LOG_RING_CAPACITY: usize = 2000;
 
 impl RylusApp {
     fn new(
@@ -135,12 +142,18 @@ impl RylusApp {
         let (event_tx, event_rx) = mpsc::channel();
         let log_lines = Arc::new(Mutex::new(Vec::<String>::new()));
 
-        // Spawn log reader thread
+        // Spawn log reader thread. Cap retention at LOG_RING_CAPACITY so memory
+        // doesn't grow without bound when the server is left running.
         {
             let log_lines = log_lines.clone();
             std::thread::spawn(move || {
                 while let Ok(msg) = log_receiver.recv() {
-                    log_lines.lock().push(msg);
+                    let mut lines = log_lines.lock();
+                    if lines.len() >= LOG_RING_CAPACITY {
+                        let drop_n = lines.len() - LOG_RING_CAPACITY + 1;
+                        lines.drain(..drop_n);
+                    }
+                    lines.push(msg);
                 }
             });
         }
@@ -184,6 +197,7 @@ impl RylusApp {
             preferences_open: false,
             log_open: false,
             config: config.clone(),
+            show_access_code: false,
         };
 
         if auto_start {
@@ -265,6 +279,11 @@ impl RylusApp {
             }
         };
 
+        // Persist edits before starting so a failed bind doesn't discard the
+        // user's in-flight field changes.
+        self.config = config.clone();
+        write_config(&config);
+
         let event_tx = self.event_tx.clone();
         if !self.rylus.start(
             &config,
@@ -274,15 +293,18 @@ impl RylusApp {
                 }
             }),
         ) {
-            self.start_error = Some("Failed to start server".to_string());
+            self.start_error = Some(
+                "Failed to start server. Common causes: port already in use, \
+                 bind address not reachable, or the previous server didn't shut \
+                 down cleanly. See the log for details."
+                    .to_string(),
+            );
             self.server_state = ServerState::Stopped;
             return;
         }
 
         self.server_state = ServerState::Running;
         self.has_started_once = true;
-        self.config = config.clone();
-        write_config(&config);
 
         // Resolve server address
         let mut web_sock = SocketAddr::new(bind_addr, web_port);
@@ -566,12 +588,21 @@ impl eframe::App for RylusApp {
                                 .color(text_secondary),
                         );
                         ui.add_space(4.0);
-                        ui.label(
-                            egui::RichText::new(&self.server_addr)
-                                .size(15.0)
-                                .color(ACCENT)
-                                .monospace(),
-                        );
+                        ui.horizontal(|ui| {
+                            ui.label(
+                                egui::RichText::new(&self.server_addr)
+                                    .size(15.0)
+                                    .color(ACCENT)
+                                    .monospace(),
+                            );
+                            if ui
+                                .small_button("Copy")
+                                .on_hover_text("Copy the connection URL to the clipboard")
+                                .clicked()
+                            {
+                                ui.ctx().copy_text(self.server_addr.clone());
+                            }
+                        });
 
                         // QR code
                         self.generate_qr_texture(ctx);
@@ -597,29 +628,31 @@ impl eframe::App for RylusApp {
                 )
                 .default_open(self.connection_open)
                 .show(ui, |ui| {
-                    self.connection_open = true;
                     ui.add_space(8.0);
 
-                    ui.horizontal(|ui| {
-                        ui.label(
-                            egui::RichText::new("Access Code")
-                                .size(13.0)
-                                .color(text_secondary),
-                        );
-                    });
-                    let resp = ui.add(
-                        egui::TextEdit::singleline(&mut self.access_code)
-                            .hint_text("Leave blank for no access code")
-                            .desired_width(300.0),
+                    ui.label(
+                        egui::RichText::new("Access Code")
+                            .size(13.0)
+                            .color(text_secondary),
                     );
-                    if resp.on_hover_text(
-                        "Restrict who can control your computer with an access code. \
-                         Note that this does NOT do any kind of encryption and it is advised \
-                         to only run Rylus inside trusted networks! Do NOT reuse any of your \
-                         passwords!",
-                    ).changed() {
-                        // Clear any stale errors
-                    }
+                    ui.horizontal(|ui| {
+                        let resp = ui.add(
+                            egui::TextEdit::singleline(&mut self.access_code)
+                                .password(!self.show_access_code)
+                                .hint_text("Leave blank for no access code")
+                                .desired_width(256.0),
+                        );
+                        resp.on_hover_text(
+                            "Restrict who can control your computer with an access code. \
+                             Note that this does NOT do any kind of encryption and it is advised \
+                             to only run Rylus inside trusted networks! Do NOT reuse any of your \
+                             passwords!",
+                        );
+                        let toggle_label = if self.show_access_code { "Hide" } else { "Show" };
+                        if ui.small_button(toggle_label).clicked() {
+                            self.show_access_code = !self.show_access_code;
+                        }
+                    });
 
                     ui.add_space(8.0);
                     ui.label(
@@ -658,7 +691,6 @@ impl eframe::App for RylusApp {
                 )
                 .default_open(self.encoding_open)
                 .show(ui, |ui| {
-                    self.encoding_open = true;
                     ui.add_space(8.0);
 
                     ui.label(
@@ -709,7 +741,6 @@ impl eframe::App for RylusApp {
                 )
                 .default_open(self.preferences_open)
                 .show(ui, |ui| {
-                    self.preferences_open = true;
                     ui.add_space(8.0);
 
                     ui.checkbox(&mut self.auto_start, "Auto Start")
@@ -748,8 +779,31 @@ impl eframe::App for RylusApp {
                 )
                 .default_open(self.log_open)
                 .show(ui, |ui| {
-                    self.log_open = true;
-                    let log_lines = self.log_lines.lock();
+                    let mut log_lines = self.log_lines.lock();
+
+                    ui.horizontal(|ui| {
+                        let count = log_lines.len();
+                        ui.label(
+                            egui::RichText::new(format!(
+                                "{count} line{}{}",
+                                if count == 1 { "" } else { "s" },
+                                if count >= LOG_RING_CAPACITY {
+                                    " (oldest trimmed)"
+                                } else {
+                                    ""
+                                },
+                            ))
+                            .size(11.0)
+                            .color(text_muted),
+                        );
+                        if ui
+                            .add_enabled(count > 0, egui::Button::new("Clear"))
+                            .on_hover_text("Clear the on-screen log buffer")
+                            .clicked()
+                        {
+                            log_lines.clear();
+                        }
+                    });
 
                     if log_lines.is_empty() {
                         ui.colored_label(
@@ -793,7 +847,7 @@ pub fn run(config: &Config, log_receiver: mpsc::Receiver<String>, rylus: Box<dyn
     let native_options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([660.0, 600.0])
-            .with_min_inner_size([400.0, 400.0])
+            .with_min_inner_size([660.0, 480.0])
             .with_title(format!("Rylus - {}", env!("CARGO_PKG_VERSION"))),
         ..Default::default()
     };
