@@ -11,9 +11,11 @@
 - **mDNS service discovery:** Server publishes `_rylus._tcp.local.` with
   a short PID-derived collision suffix, so two Rylus instances on the
   same LAN never silently clobber each other's instance name.
-- **Multi-device broadcast plumbing:** `StreamSession` fan-out via
-  `tokio::sync::broadcast` (capacity 32) wires one shared capture and
-  encode pipeline to N clients, with per-client input devices retained.
+- **Multi-device broadcast scaffolding (internal):** `StreamSession` with
+  `tokio::sync::broadcast` fan-out (capacity 32) lands as internal plumbing
+  for a future multi-tablet mode. Production still runs per-client capture
+  + encode — connecting a second tablet today doubles CPU/GPU load.
+  Tracked for a future release.
 - **Connection-quality indicator:** Tablet UI exposes a corner pip
   (green/amber/red) driven by RTT derived from server `HeartbeatAck`
   echoes every 5 seconds. Hover/tap for numeric RTT and jitter.

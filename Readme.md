@@ -60,7 +60,7 @@ Rylus exposes an HTTP and WebSocket service on your local network. The following
 Real-world capture pipelines fail — hardware goes to sleep, compositors revoke portal access, network links drop. Rylus handles these cases with graceful degradation instead of panics or silent hangs:
 
 - **WebSocket auto-reconnect:** Exponential backoff (1s to 30s), state preservation across reconnections, countdown banner with manual retry in the web client. 10 maximum attempts before giving up.
-- **Heartbeat protocol:** 30-second keep-alive messages (protocol version 2) survive PipeWire capture timeouts that would otherwise look like idle connections.
+- **Heartbeat protocol:** 5-second keep-alive messages (protocol version 3) survive PipeWire capture timeouts that would otherwise look like idle connections, and drive the tablet's connection-quality indicator via RTT sampling.
 - **Capture failure auto-teardown:** After 30 consecutive capture failures, the video loop tears down the recorder and notifies the client instead of spinning indefinitely.
 - **MSE error recovery:** Debounced sourceBuffer restart (5-second cooldown), readyState guards to prevent InvalidStateError cascades on persistent decode errors.
 - **Error handling cleanup:** 54 bare `unwrap()` calls replaced with proper error propagation or descriptive `.expect()` messages. SAFETY comments document invariants on all ~60 `unsafe` blocks.
