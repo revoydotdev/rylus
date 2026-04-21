@@ -149,6 +149,10 @@ pub struct Config {
     #[serde(skip)]
     pub completions: Option<clap_complete::Shell>,
 
+    #[arg(long, help = "Print the roff-formatted man page to stdout.")]
+    #[serde(skip)]
+    pub print_man_page: bool,
+
     #[arg(long, help = "TLS mode: disabled, auto, certified")]
     #[serde(default)]
     pub tls_mode: Option<String>,

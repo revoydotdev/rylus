@@ -29,6 +29,7 @@ parking_lot = { workspace = true }
 bytes = "1.11"
 clap = { workspace = true }
 clap_complete = { workspace = true }
+clap_mangen = "0.2"
 handlebars = "^6.4"
 http-body-util = "0.1.3"
 hyper = { version = "^1.4", features = ["server", "http1", "http2"] }

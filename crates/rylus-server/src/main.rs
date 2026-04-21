@@ -33,6 +33,18 @@ fn main() {
         return;
     }
 
+    if conf.print_man_page {
+        let cmd = Config::command()
+            .name("rylus")
+            .about("Use your tablet as a graphic tablet for your computer.");
+        let man = clap_mangen::Man::new(cmd).title("RYLUS").section("1");
+        if let Err(err) = man.render(&mut std::io::stdout()) {
+            eprintln!("Failed to render man page: {err}");
+            std::process::exit(1);
+        }
+        return;
+    }
+
     if conf.print_index_html {
         print!("{}", web::INDEX_HTML);
         return;
