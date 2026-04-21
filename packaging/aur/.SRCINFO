@@ -1,0 +1,22 @@
+pkgbase = rylus
+	pkgdesc = Turn your tablet into a graphic tablet / touch screen for your computer
+	pkgver = 0.17.0
+	pkgrel = 1
+	url = https://github.com/revelri/Rylus
+	arch = x86_64
+	license = AGPL-3.0-or-later
+	makedepends = cargo
+	makedepends = nodejs
+	makedepends = npm
+	makedepends = pkgconf
+	depends = pipewire
+	depends = ffmpeg
+	depends = gcc-libs
+	depends = glibc
+	optdepends = pipewire-pulse: PulseAudio compatibility
+	provides = rylus
+	conflicts = rylus-bin
+	source = rylus-0.17.0.tar.gz::https://github.com/revelri/Rylus/archive/refs/tags/v0.17.0.tar.gz
+	sha256sums = SKIP
+
+pkgname = rylus

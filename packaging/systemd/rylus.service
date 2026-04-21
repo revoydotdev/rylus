@@ -1,0 +1,14 @@
+[Unit]
+Description=Rylus server — use your tablet as a graphic tablet
+Documentation=https://github.com/revelri/Rylus
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/rylus --no-gui
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=default.target

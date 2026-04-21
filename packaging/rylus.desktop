@@ -5,6 +5,6 @@ Comment=Use your tablet as graphic tablet/touch screen on your computer.
 TryExec=rylus
 Exec=rylus
 Terminal=false
-Icon=input-tablet
+Icon=rylus
 Categories=Office;Graphics;Education;Presentation;
 StartupWMClass=rylus
