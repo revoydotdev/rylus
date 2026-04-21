@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use std::error::Error;
 use std::os::unix::io::{AsRawFd, FromRawFd};
 use std::sync::{Arc, LazyLock, Weak};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tracing::{debug, info, trace, warn};
 
 use pw::spa::buffer::DataType;
@@ -721,20 +721,33 @@ impl Recorder for PipeWireRecorder {
             }
         }
 
-        // Drive the PipeWire main loop to process new buffers.
-        // We iterate a few times to give PipeWire a chance to deliver frames.
-        for _ in 0..3 {
-            self.mainloop.loop_().iterate(Duration::from_millis(5));
+        // Drive the PipeWire main loop, but bail out as soon as a new buffer
+        // has been delivered. The previous implementation always burned
+        // 3 × 5 ms = 15 ms per capture regardless of when the frame arrived;
+        // the tight-polling variant returns within ~1 ms once the stream
+        // thread fires the process callback.
+        let deadline = Instant::now() + Duration::from_millis(20);
+        loop {
+            {
+                let state = self.shared.lock();
+                if state.stream_error {
+                    return Err(Box::new(PipeWireError(
+                        "PipeWire stream is in an error state".into(),
+                    )));
+                }
+                if state.new_frame {
+                    break;
+                }
+            }
+            if Instant::now() >= deadline {
+                break;
+            }
+            self.mainloop.loop_().iterate(Duration::from_millis(1));
         }
 
-        // Check if we got a new frame from the stream callbacks.
+        // Swap in the delivered frame (if any).
         {
             let mut state = self.shared.lock();
-            if state.stream_error {
-                return Err(Box::new(PipeWireError(
-                    "PipeWire stream is in an error state".into(),
-                )));
-            }
             if state.new_frame {
                 self.frame_buffer.clear();
                 std::mem::swap(&mut self.frame_buffer, &mut state.frame);

@@ -150,7 +150,11 @@ pub struct CGWindowCapturable {
 
 impl CGWindowCapturable {
     fn update_geometry(&mut self) -> Result<(), Box<dyn Error>> {
-        if Instant::now() - self.last_geometry_update > Duration::from_secs(1) {
+        // Throttle at a much tighter bound (~50 ms) so pointer mapping stays
+        // accurate when the user moves or resizes the captured window; the
+        // previous 1 s ceiling left pen coordinates up to a second stale after
+        // a window move, which is disastrous for a graphics-tablet UX.
+        if Instant::now() - self.last_geometry_update > Duration::from_millis(50) {
             self.bounds = get_window_infos()
                 .iter()
                 .find(|w| w.id == self.id)

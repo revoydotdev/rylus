@@ -273,6 +273,11 @@ pub struct RecorderX11 {
     shm_seg: shm::Seg,
     shm_id: i32,
     shm_addr: *mut u8,
+    /// Bytes allocated in the current SysV segment. We only re-allocate on
+    /// *grow* — a smaller capture size reuses the existing segment — so
+    /// resizes no longer stall capture with a free+alloc+attach round-trip
+    /// on every frame where the target happens to be smaller than before.
+    shm_capacity: usize,
     width: u16,
     height: u16,
     /// Track consecutive XShmGetImage failures to avoid log spam.
@@ -356,39 +361,59 @@ impl RecorderX11 {
             shm_seg,
             shm_id,
             shm_addr: shm_addr as *mut u8,
+            shm_capacity: seg_size as usize,
             width,
             height,
             last_capture_ok: true,
         })
     }
 
-    /// Reallocate the shared memory segment when the target has been resized.
-    fn reallocate_shm(&mut self, new_width: u16, new_height: u16) -> Result<(), CError> {
+    /// Ensure the shared memory segment is big enough for a new capture size.
+    /// Reuses the existing segment when shrinking — only grow triggers a real
+    /// reallocation — and allocates the new segment *before* freeing the old
+    /// one so a failed shmget/shmat doesn't leave the recorder in a broken
+    /// state with a dangling pointer.
+    fn ensure_shm_capacity(&mut self, new_width: u16, new_height: u16) -> Result<(), CError> {
+        let bytes_per_pixel = 4usize;
+        let needed = new_width as usize * new_height as usize * bytes_per_pixel;
+
+        if needed <= self.shm_capacity {
+            self.width = new_width;
+            self.height = new_height;
+            return Ok(());
+        }
+
         let conn = &self.capturable.conn.conn;
 
-        // Detach old segment
-        let _ = conn.shm_detach(self.shm_seg);
-        let _ = conn.flush();
-        sysv_shm::free(self.shm_id, self.shm_addr);
+        // Allocate first so we can bail without trashing the current mapping.
+        let (new_id, new_addr) =
+            sysv_shm::alloc(needed).map_err(|e| CError::with_code(1, &e))?;
 
-        let bytes_per_pixel = 4u32;
-        let seg_size = new_width as u32 * new_height as u32 * bytes_per_pixel;
-
-        let (shm_id, shm_addr) =
-            sysv_shm::alloc(seg_size as usize).map_err(|e| CError::with_code(1, &e))?;
-
-        let shm_seg = conn
+        let new_seg = conn
             .generate_id()
             .map_err(|e| CError::with_code(1, &e.to_string()))?;
-        conn.shm_attach(shm_seg, shm_id as u32, false)
-            .map_err(|e| CError::with_code(1, &format!("ShmAttach failed: {}", e)))?;
+        if let Err(e) = conn.shm_attach(new_seg, new_id as u32, false) {
+            // Roll back the new allocation before surfacing the failure.
+            sysv_shm::free(new_id, new_addr);
+            return Err(CError::with_code(1, &format!("ShmAttach failed: {}", e)));
+        }
         let _ = conn.flush();
 
-        self.shm_seg = shm_seg;
-        self.shm_id = shm_id;
-        self.shm_addr = shm_addr;
+        // Swap in the new segment, then tear down the old one.
+        let old_seg = self.shm_seg;
+        let old_id = self.shm_id;
+        let old_addr = self.shm_addr;
+
+        self.shm_seg = new_seg;
+        self.shm_id = new_id;
+        self.shm_addr = new_addr;
+        self.shm_capacity = needed;
         self.width = new_width;
         self.height = new_height;
+
+        let _ = conn.shm_detach(old_seg);
+        let _ = conn.flush();
+        sysv_shm::free(old_id, old_addr);
 
         Ok(())
     }
@@ -423,9 +448,10 @@ impl Recorder for RecorderX11 {
         let (x, y, width, height) =
             get_target_geometry(&self.capturable.conn.conn, root, &self.capturable.target)?;
 
-        // Resize shm if the target changed size
+        // Resize shm if the target changed size. Shrinking reuses the
+        // existing segment; only growing triggers a reallocation.
         if width != self.width || height != self.height {
-            self.reallocate_shm(width, height)?;
+            self.ensure_shm_capacity(width, height)?;
         }
 
         let conn = &self.capturable.conn.conn;
