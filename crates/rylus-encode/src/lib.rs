@@ -8,7 +8,7 @@ use tracing::{debug, info, warn};
 
 use rylus_core::pixel::PixelProvider;
 
-use ffi::AVPixelFormat;
+use ffi::{AVPictureType, AVPixelFormat};
 use ffmpeg_sys_next as ffi;
 
 // ============================================================
@@ -602,6 +602,11 @@ pub struct VideoEncoder {
     codec_string: String,
     codec: Codec,
     pending_pts: Option<i64>,
+    /// When true, the next encoded frame will be forced to an IDR. Consumed by
+    /// `encode_frame` and reset. Driven by `RequestKeyframe` from the client
+    /// (reconnect / tab refocus / decode-error recovery) and by the first frame
+    /// after encoder restart.
+    force_keyframe: bool,
 }
 
 // VideoEncoder contains raw FFmpeg pointers that are not thread-safe.
@@ -645,6 +650,9 @@ impl VideoEncoder {
             codec_string: String::new(),
             codec: options.codec,
             pending_pts: None,
+            // First real frame after construction should be an IDR so late joiners
+            // and post-restart clients don't wait a full GOP for playback to start.
+            force_keyframe: true,
         });
 
         encoder.open_video(options)?;
@@ -663,6 +671,11 @@ impl VideoEncoder {
 
     pub fn set_next_pts(&mut self, pts: i64) {
         self.pending_pts = Some(pts);
+    }
+
+    /// Force the next encoded frame to be an IDR keyframe.
+    pub fn request_keyframe(&mut self) {
+        self.force_keyframe = true;
     }
 
     fn open_video(&mut self, options: EncoderOptions) -> Result<(), EncodeError> {
@@ -914,6 +927,27 @@ impl VideoEncoder {
                 |c| {
                     ffi::av_opt_set((*c).priv_data, c"quality".as_ptr(), c"7".as_ptr(), 0);
                     ffi::av_opt_set((*c).priv_data, c"qp".as_ptr(), c"23".as_ptr(), 0);
+                    // async_depth=1 forces single-frame encoder pipeline; low_power uses
+                    // the fixed-function VDENC path on Intel/AMD which has lower latency
+                    // and frees the EU shader array. Both cut 1–2 frames of pipeline depth.
+                    ffi::av_opt_set(
+                        (*c).priv_data,
+                        c"async_depth".as_ptr(),
+                        c"1".as_ptr(),
+                        0,
+                    );
+                    ffi::av_opt_set(
+                        (*c).priv_data,
+                        c"low_power".as_ptr(),
+                        c"1".as_ptr(),
+                        0,
+                    );
+                    ffi::av_opt_set(
+                        (*c).priv_data,
+                        c"idr_interval".as_ptr(),
+                        c"0".as_ptr(),
+                        0,
+                    );
                 },
             )
         }
@@ -976,6 +1010,29 @@ impl VideoEncoder {
                     ffi::av_opt_set((*c).priv_data, c"rc".as_ptr(), c"cbr".as_ptr(), 0);
                     ffi::av_opt_set((*c).priv_data, c"cq".as_ptr(), c"21".as_ptr(), 0);
                     ffi::av_opt_set((*c).priv_data, c"delay".as_ptr(), c"0".as_ptr(), 0);
+                    // Lookahead buys quality at the cost of latency; kill it for screen share.
+                    ffi::av_opt_set(
+                        (*c).priv_data,
+                        c"rc-lookahead".as_ptr(),
+                        c"0".as_ptr(),
+                        0,
+                    );
+                    // Keep GOP cadence deterministic so the client can time
+                    // recovery windows; disable scene-cut injection.
+                    ffi::av_opt_set(
+                        (*c).priv_data,
+                        c"no-scenecut".as_ptr(),
+                        c"1".as_ptr(),
+                        0,
+                    );
+                    // Needed for the RequestKeyframe path to actually emit an IDR
+                    // instead of just a non-IDR recovery point.
+                    ffi::av_opt_set(
+                        (*c).priv_data,
+                        c"forced-idr".as_ptr(),
+                        c"1".as_ptr(),
+                        0,
+                    );
                 },
             )
         }
@@ -1183,6 +1240,19 @@ impl VideoEncoder {
                 .take()
                 .unwrap_or_else(|| (Instant::now() - self.start_time).as_millis() as i64);
             (*self.frame).pts = pts;
+
+            // Force an IDR when requested. Setting pict_type = I together with
+            // key_frame = 1 hits both the libx264 path and every hardware encoder
+            // we enable (NVENC with forced-idr=1, VAAPI with idr_interval=0,
+            // VideoToolbox's realtime mode, and MediaFoundation's ld_vbr).
+            if self.force_keyframe {
+                (*self.frame).pict_type = AVPictureType::AV_PICTURE_TYPE_I;
+                (*self.frame).flags |= ffi::AV_FRAME_FLAG_KEY;
+                self.force_keyframe = false;
+            } else {
+                (*self.frame).pict_type = AVPictureType::AV_PICTURE_TYPE_NONE;
+                (*self.frame).flags &= !ffi::AV_FRAME_FLAG_KEY;
+            }
 
             let ret = ffi::avcodec_send_frame(self.codec_ctx, self.frame);
             if ret < 0 {
