@@ -14,18 +14,6 @@ jobs:
     runs-on: [self-hosted, linux, x64]
     steps:
     - uses: actions/checkout@v6
-    - name: Install system dependencies
-      if: ${{ !contains(runner.name, 'arch') }}
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y \
-          libpipewire-0.3-dev \
-          libdbus-1-dev \
-          libavcodec-dev libavformat-dev libavfilter-dev libavutil-dev \
-          libswscale-dev libswresample-dev \
-          libwayland-dev libxkbcommon-dev \
-          libdrm-dev libva-dev \
-          pkg-config clang nasm
     - uses: actions/setup-node@v4
       with:
         node-version: 22
@@ -58,19 +46,6 @@ jobs:
     runs-on: [self-hosted, linux, x64]
     steps:
     - uses: actions/checkout@v6
-    - name: Install system dependencies
-      if: ${{ !contains(runner.name, 'arch') }}
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y \
-          libgl1-mesa-dev libglu1-mesa-dev cmake git curl zip \
-          libssl-dev gcc g++ autoconf libtool-bin pkg-config clang nasm \
-          libpipewire-0.3-dev libdbus-1-dev \
-          libavcodec-dev libavformat-dev libavfilter-dev libavutil-dev \
-          libswscale-dev libswresample-dev \
-          libwayland-dev libxkbcommon-dev \
-          libdrm-dev libva-dev \
-          libx11-dev libxext-dev libxrandr-dev libxfixes-dev libxi-dev libxcomposite-dev
     - uses: actions/setup-node@v4
       with:
         node-version: 22
@@ -141,38 +116,19 @@ jobs:
   build-macos:
     needs: quality
     if: startsWith(github.ref, 'refs/tags/')
-    runs-on: [self-hosted, linux, x64]
-    env:
-      VM_USER: ${{ vars.MACOS_VM_USER || 'builder' }}
-      VM_PORT: ${{ vars.MACOS_VM_PORT || '2222' }}
-      VM_SCRIPT: /mnt/games/VMs/vm-macos.sh
-      SSH_OPTS: -o StrictHostKeyChecking=no -o LogLevel=ERROR
+    runs-on: [self-hosted, macos, x64]
     steps:
     - uses: actions/checkout@v6
-    - name: Start macOS VM
-      run: $VM_SCRIPT start
-    - name: Sync code to VM
+    - name: Build
       run: |
-        rsync -az --delete \
-          -e "ssh $SSH_OPTS -p $VM_PORT" \
-          --exclude target --exclude node_modules --exclude .git \
-          . $VM_USER@localhost:~/Rylus/
-    - name: Build in VM
+        source "$HOME/.cargo/env"
+        eval "$(/usr/local/bin/brew shellenv zsh)"
+        npm install
+        cargo bundle --release --package rylus-server
+    - name: Package
       run: |
-        $VM_SCRIPT ssh 'source "$HOME/.cargo/env" && eval "$(/usr/local/bin/brew shellenv zsh)" && cd ~/Rylus && npm install && cargo bundle --release --package rylus-server'
-    - name: Retrieve artifacts
-      run: |
-        mkdir -p target/release/bundle/osx
-        scp $SSH_OPTS -P $VM_PORT \
-          $VM_USER@localhost:~/Rylus/target/release/bundle/osx/Rylus.app/Contents/MacOS/rylus \
-          target/release/bundle/osx/ || true
-        ssh $SSH_OPTS -p $VM_PORT $VM_USER@localhost \
-          'cd ~/Rylus/target/release/bundle/osx && zip -r /tmp/macos-intel.zip Rylus.app'
-        scp $SSH_OPTS -P $VM_PORT \
-          $VM_USER@localhost:/tmp/macos-intel.zip target/release/bundle/osx/
-    - name: Stop macOS VM
-      if: always()
-      run: $VM_SCRIPT stop
+        cd target/release/bundle/osx
+        zip -r macos-intel.zip Rylus.app
     - name: Artifacts
       uses: actions/upload-artifact@v6
       with:
@@ -188,29 +144,87 @@ jobs:
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+  publish-aur:
+    needs: build-linux
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: [self-hosted, linux, x64, arch]
+    steps:
+    - uses: actions/checkout@v6
+    - name: Extract version
+      id: version
+      run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+    - name: Configure SSH for AUR
+      run: |
+        mkdir -p ~/.ssh
+        echo "${{ secrets.AUR_SSH_KEY }}" > ~/.ssh/aur
+        chmod 600 ~/.ssh/aur
+        cat > ~/.ssh/config <<EOF
+        Host aur.archlinux.org
+          IdentityFile ~/.ssh/aur
+          User aur
+          StrictHostKeyChecking accept-new
+        EOF
+    - name: Publish rylus (source)
+      env:
+        PKGVER: ${{ steps.version.outputs.version }}
+      run: |
+        set -euo pipefail
+        work=$(mktemp -d)
+        git clone ssh://aur@aur.archlinux.org/rylus.git "$work/rylus"
+        cp packaging/aur/PKGBUILD "$work/rylus/PKGBUILD"
+        sed -i "s/^pkgver=.*/pkgver=${PKGVER}/" "$work/rylus/PKGBUILD"
+        sed -i "s/^pkgrel=.*/pkgrel=1/" "$work/rylus/PKGBUILD"
+        ( cd "$work/rylus" && makepkg --printsrcinfo > .SRCINFO )
+        cd "$work/rylus"
+        git -c user.email="ci@rylus.invalid" -c user.name="Rylus CI" \
+          add PKGBUILD .SRCINFO
+        if ! git diff --cached --quiet; then
+          git -c user.email="ci@rylus.invalid" -c user.name="Rylus CI" \
+            commit -m "chore: bump to ${PKGVER}"
+          git push
+        fi
+    - name: Publish rylus-bin (prebuilt)
+      env:
+        PKGVER: ${{ steps.version.outputs.version }}
+      run: |
+        set -euo pipefail
+        work=$(mktemp -d)
+        git clone ssh://aur@aur.archlinux.org/rylus-bin.git "$work/rylus-bin"
+        cp packaging/aur/PKGBUILD-bin "$work/rylus-bin/PKGBUILD"
+        sed -i "s/^pkgver=.*/pkgver=${PKGVER}/" "$work/rylus-bin/PKGBUILD"
+        sed -i "s/^pkgrel=.*/pkgrel=1/" "$work/rylus-bin/PKGBUILD"
+        ( cd "$work/rylus-bin" && makepkg --printsrcinfo > .SRCINFO )
+        cd "$work/rylus-bin"
+        git -c user.email="ci@rylus.invalid" -c user.name="Rylus CI" \
+          add PKGBUILD .SRCINFO
+        if ! git diff --cached --quiet; then
+          git -c user.email="ci@rylus.invalid" -c user.name="Rylus CI" \
+            commit -m "chore: bump to ${PKGVER}"
+          git push
+        fi
+
   build-windows:
     needs: quality
     if: startsWith(github.ref, 'refs/tags/')
-    runs-on: [self-hosted, linux, x64]
+    runs-on: [self-hosted, windows, x64]
     steps:
     - uses: actions/checkout@v6
+    - uses: actions/setup-node@v4
+      with:
+        node-version: 22
+    - uses: dtolnay/rust-toolchain@stable
+      with:
+        targets: x86_64-pc-windows-msvc
     - run: npm install
-    - name: Download FFmpeg Windows libs
-      run: |
-        if [ ! -d /mnt/games/VMs/ffmpeg-win64 ]; then
-          curl -L https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n7.1-latest-win64-lgpl-shared-7.1.zip -o /tmp/ffmpeg.zip
-          unzip -q /tmp/ffmpeg.zip -d /tmp/ffmpeg-extract
-          mv /tmp/ffmpeg-extract/ffmpeg-* /mnt/games/VMs/ffmpeg-win64
-          rm -rf /tmp/ffmpeg.zip /tmp/ffmpeg-extract
-        fi
-    - name: Cross-compile for Windows
-      run: cargo xwin build --release --target x86_64-pc-windows-msvc
+    - name: Build
+      run: cargo build --release --target x86_64-pc-windows-msvc
       env:
-        FFMPEG_DIR: /mnt/games/VMs/ffmpeg-win64
+        FFMPEG_DIR: C:\ffmpeg-win64
     - name: Package
+      shell: pwsh
       run: |
-        cd target/x86_64-pc-windows-msvc/release
-        zip rylus-windows.zip rylus.exe
+        cd target\x86_64-pc-windows-msvc\release
+        Compress-Archive -Path rylus.exe -DestinationPath rylus-windows.zip -Force
     - name: Artifacts
       uses: actions/upload-artifact@v6
       with:
