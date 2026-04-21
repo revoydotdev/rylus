@@ -96,6 +96,11 @@ video {
     height: auto;
     display: block;
     margin: auto auto;
+    /* Keep the video on its own compositor layer so settings/overlay transitions
+       don't force a recomposite of the decoded frames. */
+    will-change: transform;
+    contain: layout paint;
+    transform: translateZ(0);
 }
 
 canvas {

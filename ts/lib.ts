@@ -7,6 +7,11 @@ import {
     PressurePreset,
     showToast,
 } from "./utils";
+import {
+    createWebCodecsPipe,
+    webCodecsAvailable,
+    WebCodecsPipe,
+} from "./webcodecs";
 
 interface Window {
     ManagedMediaSource: any;
@@ -58,6 +63,9 @@ function on_heartbeat_ack() {
     rtt_samples.push(rtt);
     if (rtt_samples.length > 8) rtt_samples.shift();
     update_connection_pip();
+    // Share the measurement with the server so rate control can factor
+    // tight-latency links (mobile, Wi-Fi congestion) into QP decisions.
+    wsSend(JSON.stringify({ "ClientRtt": { "rtt_ms": Math.round(rtt) } }));
 }
 
 function rtt_jitter_ms(): number {
@@ -970,18 +978,17 @@ class PointerHandler {
             }
             let rect = (event.target as HTMLElement).getBoundingClientRect();
             const events = event_type === "pointermove" ? (event.getCoalescedEvents?.() ?? [event]) : [event];
-            for (let event of events) {
-                wsSend(
-                    JSON.stringify(
-                        {
-                            "PointerEvent": new PEvent(
-                                event_type,
-                                event,
-                                rect
-                            )
-                        }
-                    )
-                );
+            // Coalesced pointermove subevents always ship as a single
+            // BatchedPointerEvents frame — one JSON serialization, one WS
+            // write, one TCP segment. At 240 Hz pen input that collapses
+            // dozens of sends per second into a handful.
+            if (events.length > 1) {
+                const batch = events.map(e => new PEvent(event_type, e, rect));
+                wsSend(JSON.stringify({ "batched_pointer_events": batch }));
+            } else {
+                wsSend(JSON.stringify({
+                    "PointerEvent": new PEvent(event_type, events[0], rect),
+                }));
             }
             if (settings.visible) {
                 settings.toggle();
@@ -1068,6 +1075,24 @@ function frame_rate_stats() {
     setTimeout(() => frame_rate_stats(), 1500);
 }
 
+/**
+ * Wire requestVideoFrameCallback to increment the decode counter on every
+ * presented frame. Falls back to counting wire messages (the old behaviour)
+ * when the browser doesn't support rVFC. This is the only honest signal for
+ * render-rate FPS — the previous implementation reported incoming WebSocket
+ * messages per second, which masked decoder stalls and dropped frames.
+ */
+function attach_video_frame_telemetry(video: HTMLVideoElement) {
+    const anyVideo = video as any;
+    if (typeof anyVideo.requestVideoFrameCallback !== "function") return;
+    let tick: (now: number, metadata: any) => void;
+    tick = (_now, _metadata) => {
+        frame_count += 1;
+        anyVideo.requestVideoFrameCallback(tick);
+    };
+    anyVideo.requestVideoFrameCallback(tick);
+}
+
 function handle_messages(
     webSocket: WebSocket,
     video: HTMLVideoElement,
@@ -1085,7 +1110,41 @@ function handle_messages(
     // Falls back to a widely-compatible default if the server doesn't send one.
     let serverCodecString: string = "avc1.4D0028";
     const ONERROR_DEBOUNCE_MS = 5000;
-    const MAX_BUFFER_LENGTH = 20;  // In seconds
+
+    // WebCodecs fast path. When supported, the fMP4 stream is parsed in JS
+    // and access units are fed straight to a VideoDecoder — skipping MSE's
+    // container-level buffering shaves 20–50 ms of end-to-end latency. MSE
+    // remains the fallback on Safari/older browsers that don't ship
+    // WebCodecs (VideoDecoder).
+    let webcodecs_pipe: WebCodecsPipe | null = null;
+    let webcodecs_canvas: HTMLCanvasElement | null = null;
+    let webcodecs_decided = false;
+    // Promise chain that avoids racing configure() with subsequent feed()s.
+    let webcodecs_setup: Promise<void> = Promise.resolve();
+    function webcodecs_enabled(): boolean {
+        return (
+            typeof (window as any).VideoDecoder !== "undefined" &&
+            (document.getElementById("enable_webcodecs") as HTMLInputElement | null)?.checked !== false
+        );
+    }
+    function swap_in_webcodecs_surface() {
+        if (webcodecs_canvas) return;
+        const existing = document.getElementById("webcodecs_canvas") as HTMLCanvasElement | null;
+        const canvas = existing ?? document.createElement("canvas");
+        canvas.id = "webcodecs_canvas";
+        canvas.setAttribute("aria-label", "Screen mirror video");
+        // Copy the layout classes the <video> element uses so it slots into
+        // the same spot; CSS handles visibility via the `hide` class.
+        canvas.className = video.className;
+        if (!existing) {
+            video.parentElement?.insertBefore(canvas, video);
+        }
+        video.classList.add("hide");
+        webcodecs_canvas = canvas;
+    }
+    // 1 s is plenty for a LAN stream. With server-side keyframe-on-demand and
+    // drop-oldest queues, a bigger window just buys latency.
+    const MAX_BUFFER_LENGTH = 1;  // In seconds
     function upd_buf() {
         if (sourceBuffer == null)
             return;
@@ -1126,6 +1185,10 @@ function handle_messages(
             }
             if (typeof msg == "string") {
                 if (msg == "NewVideo") {
+                    if (webcodecs_pipe) {
+                        webcodecs_pipe.reset();
+                        return;
+                    }
                     let MS = window.ManagedMediaSource ? window.ManagedMediaSource : window.MediaSource;
                     mediaSource = new MS();
                     sourceBuffer = null;
@@ -1175,6 +1238,36 @@ function handle_messages(
                         serverCodecString = vi.codec_string;
                         log(LogLevel.INFO, "Server codec: " + serverCodecString);
                     }
+                    if (webcodecs_enabled() && !webcodecs_decided) {
+                        webcodecs_decided = true;
+                        webcodecs_setup = webCodecsAvailable(serverCodecString).then((ok) => {
+                            if (!ok) {
+                                log(LogLevel.INFO, "WebCodecs unsupported for " + serverCodecString + "; falling back to MSE.");
+                                return;
+                            }
+                            swap_in_webcodecs_surface();
+                            if (!webcodecs_canvas) return;
+                            webcodecs_pipe = createWebCodecsPipe(
+                                webcodecs_canvas,
+                                serverCodecString,
+                                (err) => {
+                                    log(LogLevel.WARN, "WebCodecs error: " + err + " — rebuilding stream.");
+                                    try { webcodecs_pipe?.close(); } catch (_) {}
+                                    webcodecs_pipe = null;
+                                    video.classList.remove("hide");
+                                    webcodecs_canvas?.classList.add("hide");
+                                    wsSend('"RequestKeyframe"');
+                                },
+                            );
+                            // Ask the server for a fresh IDR so the decoder
+                            // has a valid entry point without having to
+                            // discard up to a full GOP of P-frames.
+                            wsSend('"RequestKeyframe"');
+                            log(LogLevel.INFO, "WebCodecs decode path active (" + serverCodecString + ").");
+                        }).catch((e) => {
+                            log(LogLevel.WARN, "WebCodecs probe failed: " + e);
+                        });
+                    }
                 } else if ("CapturableList" in msg)
                     onCapturableList(msg["CapturableList"]);
                 else if ("Error" in msg)
@@ -1192,9 +1285,23 @@ function handle_messages(
         }
 
         // not a string -> got a video frame
+        // If WebCodecs is active, bypass MSE entirely.
+        if (webcodecs_pipe) {
+            webcodecs_pipe.feed(event.data as ArrayBuffer);
+            // Fall through to buffer-health reporting (treated as 0 — there
+            // is no MSE buffer and the decoder is fed live).
+            health_frame_count++;
+            if (health_frame_count >= 30) {
+                health_frame_count = 0;
+                wsSend(JSON.stringify({"BufferHealth": {"buffer_seconds": 0.05}}));
+            }
+            frame_count += 1;
+            return;
+        }
         queue.push(event.data);
         upd_buf();
-        frame_count += 1;
+        // Count *decoded* frames below via requestVideoFrameCallback — messages
+        // on the wire aren't the same thing as frames actually painted.
 
         // Report buffer health to server for adaptive quality
         health_frame_count++;
@@ -1212,18 +1319,21 @@ function handle_messages(
             }
         }
 
-        // only seek if there is data available, some browsers choke otherwise
+        // Seek to live only when the decoder is actually running AND we've drifted
+        // beyond the jitter budget. Unconditional seeking on every frame was the
+        // biggest source of visible stutter — let the browser play through naturally
+        // and only catch up when we've fallen measurably behind.
         if (video.seekable.length > 0) {
             let seek_time = video.seekable.end(video.seekable.length - 1);
-            if (video.readyState >= (settings.check_aggressive_seek.checked ? 3 : 4)
-                // but make sure to catch up if the video is more than 3 seconds behind
-                || seek_time - video.currentTime > 3) {
+            let lag_threshold = settings.check_aggressive_seek.checked ? 0.2 : 0.5;
+            let ready = video.readyState >= (settings.check_aggressive_seek.checked ? 3 : 4);
+            let lag = seek_time - video.currentTime;
+            if (ready && (lag > lag_threshold || lag > 3)) {
                 if (isFinite(seek_time))
                     video.currentTime = seek_time;
                 else
                     log(LogLevel.WARN, "Failed to seek to end of video.")
             }
-
         }
     }
 }
@@ -1519,6 +1629,9 @@ function init() {
             if (!settings.video_enabled())
                 wsSend('"PauseVideo"')
             settings.send_server_config()
+            // Ask the server to emit an IDR right away — without this we'd
+            // stare at a black MSE buffer until the next natural GOP boundary.
+            wsSend('"RequestKeyframe"')
 
             // Re-wire message handling and input handlers
             handle_messages(newSocket, video, () => {
@@ -1534,6 +1647,9 @@ function init() {
                     wsSend('"PauseVideo"')
                 } else if (settings.video_enabled()) {
                     wsSend('"ResumeVideo"')
+                    // Ask for a fresh IDR so we don't draw a frozen frame from a
+                    // stale P-frame chain while waiting for the next GOP boundary.
+                    wsSend('"RequestKeyframe"')
                 }
             }
         }
@@ -1569,6 +1685,7 @@ function init() {
     video.controls = false;
     video.disableRemotePlayback = true;
     video.onloadeddata = () => stretch_video();
+    attach_video_frame_telemetry(video);
     handle_messages(webSocket, video, () => {
         if (!is_connected) {
             new KeyboardHandler(webSocket);
@@ -1594,6 +1711,9 @@ function init() {
                 wsSend('"PauseVideo"');
             } else if (settings.video_enabled()) {
                 wsSend('"ResumeVideo"');
+                // Ask for a fresh IDR so we don't draw a frozen frame from a
+                // stale P-frame chain while waiting for the next GOP boundary.
+                wsSend('"RequestKeyframe"');
             }
         };
     }
