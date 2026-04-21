@@ -21,11 +21,34 @@ impl<'a> PixelProvider<'a> {
 
     /// Create an owned copy of the pixel data that can be sent across threads.
     pub fn to_owned(&self) -> OwnedPixelData {
+        self.to_owned_reusing(Vec::new())
+    }
+
+    /// Create an owned copy while reusing the capacity of an existing `Vec<u8>`.
+    ///
+    /// This is the hot-path alternative to `to_owned()` — at 4K/BGRA/30fps the
+    /// copy already costs ~1 GB/s of memcpy, and a fresh allocation per frame
+    /// adds avoidable jank. The encode thread should hand its spent buffer back
+    /// to the capture thread so the next frame reuses that allocation.
+    pub fn to_owned_reusing(&self, mut buf: Vec<u8>) -> OwnedPixelData {
+        buf.clear();
         match self {
-            PixelProvider::RGB(w, h, d) => OwnedPixelData::RGB(*w, *h, d.to_vec()),
-            PixelProvider::RGB0(w, h, d) => OwnedPixelData::RGB0(*w, *h, d.to_vec()),
-            PixelProvider::BGR0(w, h, d) => OwnedPixelData::BGR0(*w, *h, d.to_vec()),
-            PixelProvider::BGR0S(w, h, s, d) => OwnedPixelData::BGR0S(*w, *h, *s, d.to_vec()),
+            PixelProvider::RGB(w, h, d) => {
+                buf.extend_from_slice(d);
+                OwnedPixelData::RGB(*w, *h, buf)
+            }
+            PixelProvider::RGB0(w, h, d) => {
+                buf.extend_from_slice(d);
+                OwnedPixelData::RGB0(*w, *h, buf)
+            }
+            PixelProvider::BGR0(w, h, d) => {
+                buf.extend_from_slice(d);
+                OwnedPixelData::BGR0(*w, *h, buf)
+            }
+            PixelProvider::BGR0S(w, h, s, d) => {
+                buf.extend_from_slice(d);
+                OwnedPixelData::BGR0S(*w, *h, *s, buf)
+            }
         }
     }
 }
@@ -55,6 +78,17 @@ impl OwnedPixelData {
             OwnedPixelData::RGB0(w, h, d) => PixelProvider::RGB0(*w, *h, d),
             OwnedPixelData::BGR0(w, h, d) => PixelProvider::BGR0(*w, *h, d),
             OwnedPixelData::BGR0S(w, h, s, d) => PixelProvider::BGR0S(*w, *h, *s, d),
+        }
+    }
+
+    /// Consume this owned frame and return its backing buffer so it can be
+    /// recycled by the producer for the next frame.
+    pub fn into_buffer(self) -> Vec<u8> {
+        match self {
+            OwnedPixelData::RGB(_, _, d)
+            | OwnedPixelData::RGB0(_, _, d)
+            | OwnedPixelData::BGR0(_, _, d)
+            | OwnedPixelData::BGR0S(_, _, _, d) => d,
         }
     }
 }

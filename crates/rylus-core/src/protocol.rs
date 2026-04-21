@@ -52,6 +52,16 @@ pub enum MessageInbound {
     ChooseCustomInputAreas,
     BufferHealth(BufferHealth),
     Heartbeat,
+    /// Client asks the server to emit an IDR on the next encoded frame.
+    /// Used on reconnect, tab refocus, and decode-error recovery so the
+    /// client doesn't have to wait for the next natural GOP boundary.
+    RequestKeyframe,
+    /// Client-measured round-trip time (milliseconds) derived from the
+    /// Heartbeat/HeartbeatAck pair. The server uses this to shape rate
+    /// control decisions: high RTT tightens the latency budget.
+    ClientRtt {
+        rtt_ms: u32,
+    },
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
