@@ -1,12 +1,15 @@
 use futures_util::{SinkExt, StreamExt};
 use hyper::upgrade::Upgraded;
 use hyper_util::rt::TokioIo;
+use std::collections::VecDeque;
 use std::convert::Infallible;
-use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::TcpStream;
 use tokio::sync::mpsc::channel;
+use tokio::sync::Notify;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::WebSocketStream;
 use tracing::warn;
@@ -18,11 +21,19 @@ use rylus_core::protocol::{MessageInbound, MessageOutbound, RylusReceiver, Rylus
 const MAX_TEXT_FRAME_SIZE: usize = 64 * 1024; // 64 KB
 
 /// Idle timeout: close the connection if no message is received within this duration.
-const IDLE_TIMEOUT: Duration = Duration::from_secs(60);
+/// Heartbeats run on a 5 s cadence, so real clients should never sit idle this long;
+/// 120 s gives slow-network clients (e.g. mobile hotspot during a brief drop) headroom
+/// before we tear their session down.
+const IDLE_TIMEOUT: Duration = Duration::from_secs(120);
 
-/// Channel buffer capacity for both inbound and outbound WebSocket messages.
+/// Channel buffer capacity for control (non-video) WebSocket messages.
 /// Provides backpressure: senders block when the buffer is full.
 const CHANNEL_BUFFER_SIZE: usize = 32;
+
+/// Max queued video frames. A slow client that can't drain this fast enough
+/// forfeits the oldest frames — we keep the stream close to live rather than
+/// letting encoder throughput cascade-stall on the socket.
+const VIDEO_QUEUE_CAPACITY: usize = 4;
 
 pub struct WsRylusReceiver {
     recv: tokio::sync::mpsc::Receiver<MessageInbound>,
@@ -43,15 +54,69 @@ impl RylusReceiver for WsRylusReceiver {
 pub enum WsMessage {
     /// A raw tungstenite [`Message`] to forward directly over the WebSocket.
     Raw(Message),
-    /// Video frame bytes (sent as a binary WebSocket frame).
-    Video(Vec<u8>),
     /// Protocol message (serialized as JSON text WebSocket frame).
     MessageOutbound(MessageOutbound),
+}
+
+/// Drop-oldest video queue. A slow websocket client must never stall the encode
+/// thread; dropping ancient frames keeps the stream live-adjacent and surfaces
+/// the packet loss through the client's own MSE error / buffer-health signal.
+#[derive(Clone)]
+struct VideoQueue {
+    inner: Arc<Mutex<VecDeque<Vec<u8>>>>,
+    notify: Arc<Notify>,
+    dropped: Arc<AtomicU64>,
+    closed: Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl VideoQueue {
+    fn new() -> Self {
+        Self {
+            inner: Arc::new(Mutex::new(VecDeque::with_capacity(VIDEO_QUEUE_CAPACITY))),
+            notify: Arc::new(Notify::new()),
+            dropped: Arc::new(AtomicU64::new(0)),
+            closed: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        }
+    }
+
+    fn push(&self, bytes: Vec<u8>) {
+        let mut q = self.inner.lock().expect("video queue mutex poisoned");
+        while q.len() >= VIDEO_QUEUE_CAPACITY {
+            q.pop_front();
+            self.dropped.fetch_add(1, Ordering::Relaxed);
+        }
+        q.push_back(bytes);
+        self.notify.notify_one();
+    }
+
+    fn close(&self) {
+        self.closed.store(true, Ordering::Release);
+        self.notify.notify_one();
+    }
+
+    fn is_closed(&self) -> bool {
+        self.closed.load(Ordering::Acquire)
+    }
+
+    fn drain(&self) -> Vec<Vec<u8>> {
+        let mut q = self.inner.lock().expect("video queue mutex poisoned");
+        q.drain(..).collect()
+    }
 }
 
 #[derive(Clone)]
 pub struct WsRylusSender {
     sender: tokio::sync::mpsc::Sender<WsMessage>,
+    video: VideoQueue,
+}
+
+impl WsRylusSender {
+    /// Number of video frames dropped by the drop-oldest queue since creation.
+    /// Useful for QoE telemetry and for triggering keyframe requests on
+    /// sustained backpressure.
+    pub fn dropped_video_frames(&self) -> u64 {
+        self.video.dropped.load(Ordering::Relaxed)
+    }
 }
 
 impl RylusSender for WsRylusSender {
@@ -63,7 +128,9 @@ impl RylusSender for WsRylusSender {
     }
 
     fn send_video(&mut self, bytes: &[u8]) -> Result<(), Self::Error> {
-        self.sender.blocking_send(WsMessage::Video(bytes.to_vec()))
+        // Never block the encode thread on a slow client.
+        self.video.push(bytes.to_vec());
+        Ok(())
     }
 }
 
@@ -98,7 +165,9 @@ where
 
     let (sender_inbound, receiver_inbound) = channel::<MessageInbound>(CHANNEL_BUFFER_SIZE);
     let (sender_outbound, mut receiver_outbound) = channel::<WsMessage>(CHANNEL_BUFFER_SIZE);
+    let video_queue = VideoQueue::new();
 
+    let read_video = video_queue.clone();
     tokio::spawn(async move {
         loop {
             let msg = tokio::select! {
@@ -139,34 +208,57 @@ where
                 Message::Binary(_) | Message::Ping(_) | Message::Pong(_) | Message::Frame(_) => {}
             }
         }
+        // Release the writer task so the socket closes cleanly.
+        read_video.close();
     });
 
+    let write_video = video_queue.clone();
     tokio::spawn(async move {
         loop {
-            let msg = if let Some(msg) = receiver_outbound.recv().await {
-                msg
-            } else {
-                break;
-            };
+            // Drain all queued video frames before we consider a control
+            // message — video is the latency-sensitive payload, and keeping
+            // the queue short minimises end-to-end lag.
+            let frames = write_video.drain();
+            if !frames.is_empty() {
+                for data in frames {
+                    if let Err(err) = write.send(Message::Binary(data.into())).await {
+                        warn!("Failed to send video WebSocket frame: {err}");
+                        return;
+                    }
+                }
+                continue;
+            }
 
-            let result = match msg {
-                WsMessage::Raw(message) => write.send(message).await,
-                WsMessage::Video(data) => write.send(Message::Binary(data.into())).await,
-                WsMessage::MessageOutbound(msg) => {
-                    let json_string = match serde_json::to_string(&msg) {
-                        Ok(s) => s,
-                        Err(err) => {
-                            warn!("Failed to serialize outbound message: {err}");
-                            continue;
+            tokio::select! {
+                biased;
+                _ = write_video.notify.notified() => {
+                    if write_video.is_closed() && write_video.inner.lock().map(|q| q.is_empty()).unwrap_or(true) {
+                        return;
+                    }
+                }
+                maybe_msg = receiver_outbound.recv() => {
+                    let msg = match maybe_msg {
+                        Some(m) => m,
+                        None => return,
+                    };
+                    let result = match msg {
+                        WsMessage::Raw(message) => write.send(message).await,
+                        WsMessage::MessageOutbound(msg) => {
+                            let json_string = match serde_json::to_string(&msg) {
+                                Ok(s) => s,
+                                Err(err) => {
+                                    warn!("Failed to serialize outbound message: {err}");
+                                    continue;
+                                }
+                            };
+                            write.send(Message::Text(json_string.into())).await
                         }
                     };
-                    write.send(Message::Text(json_string.into())).await
+                    if let Err(err) = result {
+                        warn!("Failed to send WebSocket message: {err}");
+                        return;
+                    }
                 }
-            };
-
-            if let Err(err) = result {
-                warn!("Failed to send WebSocket message: {err}");
-                break;
             }
         }
     });
@@ -174,6 +266,7 @@ where
     (
         WsRylusSender {
             sender: sender_outbound,
+            video: video_queue,
         },
         WsRylusReceiver {
             recv: receiver_inbound,
@@ -215,26 +308,19 @@ mod tests {
     #[test]
     fn ws_message_variants_are_constructible() {
         let raw = WsMessage::Raw(Message::Text("test".into()));
-        let video = WsMessage::Video(vec![0xFF; 1024]);
         let outbound = WsMessage::MessageOutbound(rylus_core::protocol::MessageOutbound::Error(
             "test error".into(),
         ));
 
         match raw {
             WsMessage::Raw(_) => {}
-            WsMessage::Video(_) | WsMessage::MessageOutbound(_) => {
+            WsMessage::MessageOutbound(_) => {
                 panic!("expected Raw variant")
-            }
-        }
-        match video {
-            WsMessage::Video(_) => {}
-            WsMessage::Raw(_) | WsMessage::MessageOutbound(_) => {
-                panic!("expected Video variant")
             }
         }
         match outbound {
             WsMessage::MessageOutbound(_) => {}
-            WsMessage::Raw(_) | WsMessage::Video(_) => {
+            WsMessage::Raw(_) => {
                 panic!("expected MessageOutbound variant")
             }
         }
@@ -244,8 +330,24 @@ mod tests {
     #[test]
     fn ws_rylus_sender_is_cloneable() {
         let (tx, _rx) = channel::<WsMessage>(4);
-        let sender = WsRylusSender { sender: tx };
+        let sender = WsRylusSender {
+            sender: tx,
+            video: VideoQueue::new(),
+        };
         let _clone = sender.clone();
+    }
+
+    #[test]
+    fn video_queue_drops_oldest_at_capacity() {
+        let q = VideoQueue::new();
+        for i in 0..(VIDEO_QUEUE_CAPACITY as u8 + 3) {
+            q.push(vec![i]);
+        }
+        let drained = q.drain();
+        assert_eq!(drained.len(), VIDEO_QUEUE_CAPACITY);
+        assert_eq!(q.dropped.load(Ordering::Relaxed), 3);
+        // Oldest were dropped; the first remaining frame should be frame index 3.
+        assert_eq!(drained[0], vec![3]);
     }
 
     /// Test that WsRylusSender implements RylusSender trait.

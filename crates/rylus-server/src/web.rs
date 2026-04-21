@@ -911,6 +911,12 @@ async fn run_server(
 
         debug!(address = ?remote_address, "Client connected.");
 
+        // Disable Nagle: video frames and pointer events are both latency-sensitive,
+        // and Nagle + delayed ACK can stack 40 ms of interactive lag on small writes.
+        if let Err(err) = tcp.set_nodelay(true) {
+            warn!("Failed to set TCP_NODELAY: {err}");
+        }
+
         let io: TokioIo<TlsOrTcpStream> = match &tls_config {
             Some(config) => {
                 let acceptor = TlsAcceptor::from(config.clone());
