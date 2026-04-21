@@ -44,6 +44,8 @@ pub(crate) enum VideoCommands {
     Resume,
     Restart,
     BufferHealth(f64),
+    RequestKeyframe,
+    ClientRtt(u32),
 }
 
 fn send_message<S>(sender: &mut S, message: MessageOutbound)
@@ -159,6 +161,18 @@ impl<S, R, FnUInput> RylusClientHandler<S, R, FnUInput> {
                                 .send(VideoCommands::BufferHealth(health.buffer_seconds))
                             {
                                 warn!("Failed to send BufferHealth to video thread: {e}");
+                            }
+                        }
+                        MessageInbound::RequestKeyframe => {
+                            if let Err(e) = self.video_sender.send(VideoCommands::RequestKeyframe) {
+                                warn!("Failed to send RequestKeyframe to video thread: {e}");
+                            }
+                        }
+                        MessageInbound::ClientRtt { rtt_ms } => {
+                            if let Err(e) =
+                                self.video_sender.send(VideoCommands::ClientRtt(rtt_ms))
+                            {
+                                warn!("Failed to send ClientRtt to video thread: {e}");
                             }
                         }
                         MessageInbound::Heartbeat => {
@@ -524,13 +538,19 @@ enum EncodeCommand {
     },
     /// Adjust encoding quality.
     SetQuality(u32),
+    /// Force the next encoded frame to be an IDR keyframe.
+    RequestKeyframe,
     /// Shut down the encode thread.
     Stop,
 }
 
 /// Encode thread: owns the VideoEncoder, receives frames from the capture thread.
+/// `buffer_return_tx` is the send-half of the recycled-buffer channel back to
+/// the capture thread — once a frame is encoded its backing `Vec<u8>` is
+/// shipped back so the next capture can reuse the allocation.
 fn encode_thread<S: RylusSender + Clone + Send + 'static>(
     encode_rx: mpsc::Receiver<EncodeCommand>,
+    buffer_return_tx: mpsc::SyncSender<Vec<u8>>,
     mut sender: S,
     encoder_options: EncoderOptions,
 ) {
@@ -541,9 +561,15 @@ fn encode_thread<S: RylusSender + Clone + Send + 'static>(
             EncodeCommand::Frame(owned) => {
                 let enc = match video_encoder.as_mut() {
                     Some(e) => e,
-                    None => continue,
+                    None => {
+                        // Still return the buffer even when dropping so capture doesn't
+                        // start allocating fresh Vecs unnecessarily.
+                        let _ = buffer_return_tx.try_send(owned.into_buffer());
+                        continue;
+                    }
                 };
                 enc.encode(owned.as_provider());
+                let _ = buffer_return_tx.try_send(owned.into_buffer());
             }
             EncodeCommand::Restart {
                 width_in,
@@ -587,6 +613,11 @@ fn encode_thread<S: RylusSender + Clone + Send + 'static>(
                     enc.set_quality(qp);
                 }
             }
+            EncodeCommand::RequestKeyframe => {
+                if let Some(enc) = video_encoder.as_mut() {
+                    enc.request_keyframe();
+                }
+            }
             EncodeCommand::Stop => return,
         }
     }
@@ -621,6 +652,10 @@ struct QualityController {
     encode_time_avg: f64,
     /// Most recent buffer health from client (seconds of buffered video).
     buffer_health_secs: Option<f64>,
+    /// Exponential moving average of client-reported RTT in milliseconds.
+    /// High RTT shrinks the effective latency budget, so we treat the same
+    /// buffer depth as more alarming when the round trip is already slow.
+    rtt_ms_avg: Option<f64>,
 }
 
 impl QualityController {
@@ -629,6 +664,7 @@ impl QualityController {
             current_qp: QP_DEFAULT,
             encode_time_avg: 0.0,
             buffer_health_secs: None,
+            rtt_ms_avg: None,
         }
     }
 
@@ -636,11 +672,21 @@ impl QualityController {
         self.current_qp = QP_DEFAULT;
         self.encode_time_avg = 0.0;
         self.buffer_health_secs = None;
+        self.rtt_ms_avg = None;
     }
 
     /// Update the buffer health signal from the client.
     fn set_buffer_health(&mut self, secs: f64) {
         self.buffer_health_secs = Some(secs);
+    }
+
+    /// Record a client-measured RTT reading (milliseconds).
+    fn set_rtt_ms(&mut self, rtt_ms: u32) {
+        let sample = rtt_ms as f64;
+        self.rtt_ms_avg = Some(match self.rtt_ms_avg {
+            Some(avg) => 0.3 * sample + 0.7 * avg,
+            None => sample,
+        });
     }
 
     /// Update the local encode time (exponential moving average).
@@ -651,11 +697,22 @@ impl QualityController {
     /// Decide the new QP based on both signals. Returns Some(new_qp) if a change
     /// is needed, None if QP should stay the same.
     fn decide(&mut self, frame_budget_secs: f64) -> Option<u32> {
+        // When the client reports high RTT we tighten the thresholds — a
+        // buffer depth that's fine on LAN is already a warning sign on a
+        // 150 ms mobile link.
+        let rtt_tightening = match self.rtt_ms_avg {
+            Some(avg) if avg > 150.0 => 1.0,
+            Some(avg) if avg > 80.0 => 0.5,
+            _ => 0.0,
+        };
+        let warn_threshold: f64 = (2.0_f64 - rtt_tightening).max(0.5);
+        let severe_threshold: f64 = (3.0_f64 - rtt_tightening).max(warn_threshold + 0.5);
+
         // Buffer health signal: the end-to-end indicator.
         let buffer_delta = self.buffer_health_secs.map(|b| {
-            if b > 3.0 {
+            if b > severe_threshold {
                 2i32 // Severely overloaded, aggressive reduction
-            } else if b > 2.0 {
+            } else if b > warn_threshold {
                 1 // Mildly overloaded
             } else if b < 0.5 && self.current_qp > QP_MIN {
                 -1 // Headroom available
@@ -724,9 +781,13 @@ fn handle_video<S: RylusSender + Clone + Send + 'static>(
 
     // Bounded channel with capacity 1: if encode is busy, the frame is dropped.
     let (encode_tx, encode_rx) = mpsc::sync_channel::<EncodeCommand>(1);
+    // Recycled pixel buffers come back here so the capture thread can reuse the
+    // Vec capacity. Capacity 2 is plenty — at most one frame is in-flight in
+    // `encode_tx` and one is being processed on the encode thread.
+    let (buffer_return_tx, buffer_return_rx) = mpsc::sync_channel::<Vec<u8>>(2);
     let encode_handle = {
         let sender = sender.clone();
-        spawn(move || encode_thread(encode_rx, sender, encoder_options))
+        spawn(move || encode_thread(encode_rx, buffer_return_tx, sender, encoder_options))
     };
 
     let mut recorder: Option<Box<dyn Recorder>> = None;
@@ -752,6 +813,10 @@ fn handle_video<S: RylusSender + Clone + Send + 'static>(
     let mut consecutive_capture_failures: u32 = 0;
     const MAX_CAPTURE_FAILURES: u32 = 30;
     let mut last_stats_log = Instant::now();
+
+    // Local spare buffer: holds a Vec recycled from a previously-dropped frame
+    // so we don't reallocate on the very next capture.
+    let mut spare_buffer: Option<Vec<u8>> = None;
 
     loop {
         let now = Instant::now();
@@ -812,6 +877,12 @@ fn handle_video<S: RylusSender + Clone + Send + 'static>(
             }
             Ok(VideoCommands::BufferHealth(buffer_secs)) => {
                 quality.set_buffer_health(buffer_secs);
+            }
+            Ok(VideoCommands::RequestKeyframe) => {
+                let _ = encode_tx.try_send(EncodeCommand::RequestKeyframe);
+            }
+            Ok(VideoCommands::ClientRtt(rtt_ms)) => {
+                quality.set_rtt_ms(rtt_ms);
             }
             Err(RecvTimeoutError::Timeout) => {
                 last_frame = next_frame;
@@ -881,8 +952,14 @@ fn handle_video<S: RylusSender + Clone + Send + 'static>(
                     });
                 }
 
-                // Copy pixel data to owned buffer and send to encode thread
-                let owned = pixel_data.to_owned();
+                // Reuse the encode thread's returned buffer (or a local spare
+                // from a previously-dropped frame) if available; only allocate
+                // fresh on the very first frame or after a resize.
+                let recycled = spare_buffer
+                    .take()
+                    .or_else(|| buffer_return_rx.try_recv().ok())
+                    .unwrap_or_default();
+                let owned = pixel_data.to_owned_reusing(recycled);
                 let capture_elapsed = capture_start.elapsed().as_secs_f64();
 
                 // try_send: if encoder is busy, drop this frame
@@ -890,6 +967,12 @@ fn handle_video<S: RylusSender + Clone + Send + 'static>(
                 match encode_tx.try_send(EncodeCommand::Frame(owned)) {
                     Ok(()) => {
                         quality.record_encode_time(capture_elapsed);
+                    }
+                    Err(mpsc::TrySendError::Full(EncodeCommand::Frame(owned))) => {
+                        // Rescue the Vec so the next frame can reuse it.
+                        spare_buffer = Some(owned.into_buffer());
+                        frames_dropped += 1;
+                        trace!("Dropped frame (encoder busy)");
                     }
                     Err(mpsc::TrySendError::Full(_)) => {
                         frames_dropped += 1;
