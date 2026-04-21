@@ -111,6 +111,15 @@ The above features are available on all operating systems. Additional features o
 
 Download the latest release for your OS from the [releases page](https://github.com/revelri/Rylus/releases). No apps are needed on your tablet — just a modern browser (Firefox 80+, Safari on iOS/iPadOS 13+).
 
+**Arch Linux:** install from the AUR:
+
+```
+yay -S rylus-bin   # prebuilt binary
+yay -S rylus       # source build
+```
+
+Both packages install a `rylus.service` user unit; `systemctl --user enable --now rylus` will start Rylus in headless mode on login.
+
 **Linux users:** follow the [uinput setup instructions](#linux) to enable stylus pressure sensitivity and multi-touch support.
 
 ## Running

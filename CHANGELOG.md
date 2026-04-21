@@ -1,5 +1,21 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+- **AUR packaging:** source-based `rylus` and prebuilt `rylus-bin` PKGBUILDs
+  under `packaging/aur/`, with matching `.SRCINFO`. A new `publish-aur` CI
+  job pushes both on tag releases (gated on the `AUR_SSH_KEY` secret).
+- **`--print-man-page` flag:** emits the roff-formatted man page to stdout
+  via `clap_mangen`, so packagers can install `rylus.1` without a separate
+  build-time dependency tree.
+- **Icon asset:** first real `packaging/icons/rylus.svg` plus a raster
+  generator (`scripts/gen-icons.sh`). Desktop entry now references `rylus`
+  instead of the generic `input-tablet` fallback.
+- **Systemd user unit** (`packaging/systemd/rylus.service`) for headless
+  autostart on Linux.
+
 ## [0.17.0] - 2026-04-18
 
 ### Added
