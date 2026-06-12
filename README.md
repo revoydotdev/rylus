@@ -53,7 +53,7 @@ Rylus exposes an HTTP and WebSocket service on your local network. The following
 - **Authentication transport:** Access codes moved from GET query parameters to POST request body — codes no longer appear in URLs, server logs, or browser history.
 - **Session management:** Authenticated sessions use HttpOnly, SameSite=Strict cookies.
 - **Rate limiting:** 5 failed authentication attempts per 60-second window triggers a 30-second lockout per IP.
-- **WebSocket limits:** 64KB text frame maximum to prevent OOM from oversized control messages. 60-second idle timeout closes zombie connections, freeing video, encode, and input device resources.
+- **WebSocket limits:** 64KB text frame maximum to prevent OOM from oversized control messages. 120-second idle timeout closes zombie connections, freeing video, encode, and input device resources.
 
 ### Reliability and Error Recovery
 
@@ -69,7 +69,7 @@ Real-world capture pipelines fail — hardware goes to sleep, compositors revoke
 
 ### Developer Experience
 
-- **Test suite:** 97 tests covering protocol serialization, config parsing, pixel formats, access code authentication, rate limiting, and session tokens.
+- **Test suite:** 200+ tests across Rust and TypeScript covering protocol serialization, config parsing, pixel formats, access code authentication, rate limiting, session tokens, encoder buffer validation, and client reconnect logic.
 - **CI quality gates:** clippy, rustfmt, and cargo-audit run before builds.
 - **Structured logging:** The `tracing` crate with optional JSON output (`RYLUS_LOG_JSON=true`). Configurable log levels via `RYLUS_LOG_LEVEL`.
 - **Frontend build:** esbuild replaces tsc for TypeScript compilation, with proper `rerun-if-changed` integration in build.rs.
