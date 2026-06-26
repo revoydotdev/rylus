@@ -81,3 +81,41 @@ land when they're ready.
 
 Open an issue to suggest a milestone change, or a pull request for any item
 above. See [CONTRIBUTING.md](CONTRIBUTING.md).
+
+---
+
+## revoy ledger block
+
+Machine-readable current phase for the revoy cross-project ledger. Mirrors the
+"Path to 1.0" items above; keep in sync when items land.
+
+<!-- revoy:begin -->
+```toml
+phase = "Path to 1.0"
+
+[[todo]]
+line = "rylus-server --self-test flag wired into per-OS CI smoke matrix that gates releases"
+difficulty = 40
+priority = "HIGH"
+
+[[todo]]
+line = "Performance budget: per-backend latency targets + benchmark harness + CI regression gate"
+difficulty = 55
+priority = "MED"
+
+[[todo]]
+line = "PWA accessibility audit (axe-core all routes, WCAG 2.1 AA, keyboard-only settings)"
+difficulty = 35
+priority = "MED"
+
+[[todo]]
+line = "Documentation pass: README quickstart verified on all three OSes; CHANGELOG 1.0 entry"
+difficulty = 20
+priority = "MED"
+
+[[todo]]
+line = "Tag v1.0.0 (signed annotated tag, GitHub release with artifacts, AUR rylus-bin update)"
+difficulty = 15
+priority = "LOW"
+```
+<!-- revoy:end -->
