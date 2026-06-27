@@ -111,7 +111,7 @@ The above features are available on all operating systems. Additional features o
 
 ## Installation
 
-Download the latest release for your OS from the [releases page](https://github.com/revelri/Rylus/releases). No apps are needed on your tablet — just a modern browser (Firefox 80+, Safari on iOS/iPadOS 13+).
+Download the latest release for your OS from the [releases page](https://github.com/Chorosyne/rylus/releases). No apps are needed on your tablet — just a modern browser (Firefox 80+, Safari on iOS/iPadOS 13+).
 
 **Arch Linux:** install from the AUR:
 
