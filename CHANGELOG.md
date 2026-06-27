@@ -1,5 +1,34 @@
 # Changelog
 
+## [Unreleased] — 1.0 path
+
+### Added
+
+- **`docs/PROTOCOL.md` wire-format spec:** documents all protocol messages
+  (Hello/HelloAck/HelloNack, Config, CapturableList, Heartbeat/HeartbeatAck,
+  RequestKeyframe, ClientRtt, NewVideo/VideoFrame), framing (little-endian
+  length prefix + JSON/binary payload), and versioning contract (protocol
+  version 3 as of v0.17.0, `MIN_CLIENT_PROTOCOL_VERSION` enforced via
+  `HelloNack`).
+- **`docs/SECURITY-REVIEW.md`:** pre-1.0 security review covering argon2 auth
+  params, rate-limit tuning, TLS cert generation and storage, session-token
+  lifecycle, and explicit WebSocket `Origin` validation.
+- **README accuracy pass:** corrected stale WebSocket port 9001 references
+  (WS is now at `/ws` on the same port as HTTP), corrected TLS default (Auto
+  mode generates a self-signed cert on first run, not "no TLS by default"),
+  documented `--tls-mode` / `--tls-cert-path` / `--tls-key-path` flags, added
+  minimal headless invocation examples, and updated badge/clone URLs to the
+  `Chorosyne/rylus` org.
+
+### In progress (sibling branches, not yet merged)
+
+- **`rylus-server --self-test` flag** (`ryl-self-test`): boot → capture one
+  frame → encode one frame → accept one WebSocket client → exit clean; wired
+  into per-OS CI smoke matrix.
+- **TLS key-permission hardening** (`ryl-tls-keyperm`): generated private key
+  set to mode 0o600 on creation; file permissions verified on load, with a
+  clear error if permissions are too open.
+
 ## [Unreleased]
 
 ### Added
