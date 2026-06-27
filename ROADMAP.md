@@ -54,16 +54,17 @@ land when they're ready.
       to a checked-in baseline and fails on regression beyond a defined threshold.
 - [ ] **PWA accessibility audit.** axe-core across all client routes; WCAG 2.1 AA
       findings fixed or filed with rationale; keyboard-only settings verified.
-- [ ] **Security review.** Diff review since 0.15.0 — argon2 params, rate-limit
+- [x] **Security review.** Diff review since 0.15.0 — argon2 params, rate-limit
       tuning, TLS cert generation, session-token lifecycle, explicit WebSocket
-      `Origin` validation.
+      `Origin` validation. Findings in `docs/SECURITY-REVIEW.md`.
 
 ### 1.0 release
 
-- [ ] **`docs/PROTOCOL.md`** describing the wire format (message types, framing,
+- [x] **`docs/PROTOCOL.md`** describing the wire format (message types, framing,
       heartbeat, keyframe-on-demand).
-- [ ] **Documentation pass.** README quickstart verified on all three OSes;
-      CHANGELOG entry for 1.0.
+- [ ] **Documentation pass.** README quickstart corrected against the current CLI
+      and CHANGELOG entry added; cross-OS verification (macOS, Windows) still
+      outstanding — cannot be completed from a Linux-only build environment.
 - [ ] **Tag v1.0.0.** Signed annotated tag (note: current git history is tagged
       only through v0.6.1 — annotate the 0.7–0.17 line or start clean at 1.0);
       GitHub release with packaging artifacts; AUR `rylus-bin` updated shortly after.
