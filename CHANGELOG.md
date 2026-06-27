@@ -4,6 +4,11 @@
 
 ### Added
 
+- **`rylus-server --self-test` flag:** boots the server, captures one frame
+  (synthetic source, no display required), encodes one software H.264 frame,
+  accepts one WebSocket client (`101 Switching Protocols`), then exits `0`/`1`
+  under a watchdog timeout. Wired into a per-OS CI smoke matrix that gates the
+  release builds via `needs:`.
 - **`docs/PROTOCOL.md` wire-format spec:** documents all protocol messages
   (Hello/HelloAck/HelloNack, Config, CapturableList, Heartbeat/HeartbeatAck,
   RequestKeyframe, ClientRtt, NewVideo/VideoFrame), framing (little-endian
@@ -20,14 +25,13 @@
   minimal headless invocation examples, and updated badge/clone URLs to the
   `Chorosyne/rylus` org.
 
-### In progress (sibling branches, not yet merged)
+### Fixed
 
-- **`rylus-server --self-test` flag** (`ryl-self-test`): boot → capture one
-  frame → encode one frame → accept one WebSocket client → exit clean; wired
-  into per-OS CI smoke matrix.
-- **TLS key-permission hardening** (`ryl-tls-keyperm`): generated private key
-  set to mode 0o600 on creation; file permissions verified on load, with a
-  clear error if permissions are too open.
+- **TLS auto-mode private key is no longer world-readable.** The self-signed
+  cert/key pair is now stored under the per-user XDG state dir
+  (`~/.local/state/rylus`, falling back to `~/.config/rylus`) instead of the
+  shared `/tmp/rylus`. On Unix the directory is created `0700` and the private
+  key is written `0600`; the public cert remains `0644`.
 
 ## [Unreleased]
 
