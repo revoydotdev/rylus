@@ -94,11 +94,6 @@ Machine-readable current phase for the revoy cross-project ledger. Mirrors the
 phase = "Path to 1.0"
 
 [[todo]]
-line = "rylus-server --self-test flag wired into per-OS CI smoke matrix that gates releases"
-difficulty = 40
-priority = "HIGH"
-
-[[todo]]
 line = "Performance budget: per-backend latency targets + benchmark harness + CI regression gate"
 difficulty = 55
 priority = "MED"
