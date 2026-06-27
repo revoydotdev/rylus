@@ -4028,6 +4028,7 @@ dependencies = [
  "clap",
  "clap_complete",
  "clap_mangen",
+ "dirs",
  "handlebars",
  "hostname",
  "http-body-util",

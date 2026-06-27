@@ -65,7 +65,15 @@ impl Rylus {
                 None
             }
             TlsMode::Auto => {
-                let cert_dir = std::path::PathBuf::from("/tmp").join("rylus");
+                // Store cert/key under the per-user XDG state dir
+                // (~/.local/state/rylus), falling back to the XDG config dir
+                // (~/.config/rylus) when state_dir() is unavailable (e.g.
+                // non-XDG platforms). Both are private to the current user,
+                // unlike the former /tmp/rylus which was world-readable.
+                let cert_dir = dirs::state_dir()
+                    .or_else(dirs::config_dir)
+                    .unwrap_or_else(|| std::path::PathBuf::from("."))
+                    .join("rylus");
                 match crate::tls::load_or_generate_cert(
                     &cert_dir.join("cert.der"),
                     &cert_dir.join("key.der"),
