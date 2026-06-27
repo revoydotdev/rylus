@@ -153,6 +153,13 @@ pub struct Config {
     #[serde(skip)]
     pub print_man_page: bool,
 
+    #[arg(
+        long,
+        help = "Run built-in self-test (boot → capture → encode → WebSocket handshake → exit 0/1)."
+    )]
+    #[serde(skip)]
+    pub self_test: bool,
+
     #[arg(long, help = "TLS mode: disabled, auto, certified")]
     #[serde(default)]
     pub tls_mode: Option<String>,

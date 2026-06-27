@@ -12,6 +12,7 @@ use rylus_core::Web2UiMessage;
 mod log;
 mod mdns;
 mod rylus;
+mod self_test;
 mod session;
 mod tls;
 mod web;
@@ -69,6 +70,13 @@ fn main() {
         rylus_capture::x11::x11_init();
 
         pipewire::init();
+    }
+
+    if conf.self_test {
+        // Short-circuit: run the built-in smoke test and exit.
+        // self_test::run() calls std::process::exit(0|1) and never returns.
+        self_test::run();
+        return;
     }
 
     #[cfg(feature = "gui")]

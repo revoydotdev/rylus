@@ -46,7 +46,7 @@ land when they're ready.
 
 ### Pre-release hardening
 
-- [ ] **`rylus-server --self-test` flag.** Boot → capture one frame → encode one
+- [x] **`rylus-server --self-test` flag.** Boot → capture one frame → encode one
       frame → accept one WebSocket client → exit clean. Wired into a per-OS CI
       smoke matrix that gates releases.
 - [ ] **Performance budget.** Latency targets per backend (capture → encode →
