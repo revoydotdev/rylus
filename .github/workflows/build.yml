@@ -41,8 +41,79 @@ jobs:
     - name: Audit
       run: cargo audit
 
-  build-linux:
+  # ---------------------------------------------------------------------------
+  # Per-OS smoke tests: build rylus-server, run --self-test, gate releases.
+  # TestCapturable provides a synthetic pixel source so no real display,
+  # X11 connection, or PipeWire daemon is required on any platform.
+  # ---------------------------------------------------------------------------
+
+  smoke-linux:
     needs: quality
+    runs-on: [self-hosted, linux, x64]
+    steps:
+    - uses: actions/checkout@v6
+    - uses: actions/setup-node@v4
+      with:
+        node-version: 22
+    - run: npm install && npm run build
+    - uses: dtolnay/rust-toolchain@stable
+    - uses: actions/cache@v5
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+          target
+        key: ${{ runner.os }}-smoke-cargo-${{ hashFiles('Cargo.lock') }}
+    - name: Build rylus-server
+      run: cargo build -p rylus-server
+    - name: Self-test
+      run: ./target/debug/rylus --self-test
+
+  smoke-macos:
+    needs: quality
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: [self-hosted, macos, x64]
+    steps:
+    - uses: actions/checkout@v6
+    - name: Build and self-test
+      run: |
+        source "$HOME/.cargo/env"
+        eval "$(/usr/local/bin/brew shellenv zsh)"
+        npm install && npm run build
+        cargo build -p rylus-server
+        ./target/debug/rylus --self-test
+
+  smoke-windows:
+    needs: quality
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: [self-hosted, windows, x64]
+    steps:
+    - uses: actions/checkout@v6
+    - uses: actions/setup-node@v4
+      with:
+        node-version: 22
+    - uses: dtolnay/rust-toolchain@stable
+      with:
+        targets: x86_64-pc-windows-msvc
+    - run: npm install
+    - name: Build frontend
+      run: npm run build
+    - name: Build rylus-server
+      run: cargo build -p rylus-server --target x86_64-pc-windows-msvc
+      env:
+        FFMPEG_DIR: C:\ffmpeg-win64
+    - name: Self-test
+      run: .\target\x86_64-pc-windows-msvc\debug\rylus.exe --self-test
+      env:
+        FFMPEG_DIR: C:\ffmpeg-win64
+
+  # ---------------------------------------------------------------------------
+  # Release builds — each depends on its smoke job so a failing self-test
+  # blocks artifact upload and GitHub release publication.
+  # ---------------------------------------------------------------------------
+
+  build-linux:
+    needs: [quality, smoke-linux]
     runs-on: [self-hosted, linux, x64]
     steps:
     - uses: actions/checkout@v6
@@ -84,7 +155,7 @@ jobs:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   build-linux-alpine:
-    needs: quality
+    needs: [quality, smoke-linux]
     runs-on: [self-hosted, linux, x64]
     steps:
     - uses: actions/checkout@v6
@@ -114,7 +185,7 @@ jobs:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   build-macos:
-    needs: quality
+    needs: [quality, smoke-macos]
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: [self-hosted, macos, x64]
     steps:
@@ -204,7 +275,7 @@ jobs:
         fi
 
   build-windows:
-    needs: quality
+    needs: [quality, smoke-windows]
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: [self-hosted, windows, x64]
     steps:
