@@ -95,11 +95,6 @@ Machine-readable current phase for the revoy cross-project ledger. Mirrors the
 phase = "Path to 1.0"
 
 [[todo]]
-line = "Performance budget: per-backend latency targets + benchmark harness + CI regression gate"
-difficulty = 55
-priority = "MED"
-
-[[todo]]
 line = "PWA accessibility audit (axe-core all routes, WCAG 2.1 AA, keyboard-only settings)"
 difficulty = 35
 priority = "MED"
