@@ -24,6 +24,12 @@
   documented `--tls-mode` / `--tls-cert-path` / `--tls-key-path` flags, added
   minimal headless invocation examples, and updated badge/clone URLs to the
   `Chorosyne/rylus` org.
+- **Latency budget benchmark harness (`rylus-encode` `bench` bin):** a
+  std-only harness that times the display-free hot paths — software H.264
+  encode of a synthetic frame (the `--self-test` path) and protocol message
+  serialize/deserialize — against explicit per-target latency budgets, exiting
+  non-zero when a budget is exceeded. Wired into a `bench.yml` CI job so a
+  latency regression fails the build.
 
 ### Fixed
 
