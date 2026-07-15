@@ -273,6 +273,52 @@ async fn response_from_path_or_default(
     }
 }
 
+/// The standard response type served by this module.
+type WebResponse = Response<BoxBody<Bytes, Infallible>>;
+
+/// Validate the WebSocket upgrade request and build the RFC 6455 handshake
+/// response. Returns an error response if the request is not a well-formed
+/// WebSocket upgrade (missing key, wrong version).
+///
+/// The `Sec-WebSocket-Accept` header is mandatory: browsers fail the
+/// connection if it is absent or wrong (RFC 6455 §4.1). This was regressed
+/// once during the fastwebsockets → hyper migration; the self-test now
+/// verifies the accept key to keep it from regressing silently.
+fn ws_handshake_response(req: &Request<Incoming>) -> Result<WebResponse, Box<WebResponse>> {
+    let version_ok = req
+        .headers()
+        .get("sec-websocket-version")
+        .and_then(|h| h.to_str().ok())
+        .is_some_and(|v| v.split(',').any(|v| v.trim() == "13"));
+    if !version_ok {
+        return Err(Box::new(
+            Response::builder()
+                .status(StatusCode::UPGRADE_REQUIRED)
+                .header("sec-websocket-version", "13")
+                .body(Full::new(Bytes::from("unsupported websocket version")).boxed())
+                .expect("upgrade required response builder should not fail"),
+        ));
+    }
+    let key = match req.headers().get("sec-websocket-key") {
+        Some(k) => k.as_bytes(),
+        None => {
+            return Err(Box::new(boxed_response(
+                StatusCode::BAD_REQUEST,
+                "text/plain; charset=utf-8",
+                "missing Sec-WebSocket-Key",
+            )));
+        }
+    };
+    let accept = rylus_transport::derive_accept_key(key);
+    Ok(Response::builder()
+        .status(StatusCode::SWITCHING_PROTOCOLS)
+        .header("upgrade", "websocket")
+        .header("connection", "Upgrade")
+        .header("sec-websocket-accept", accept)
+        .body(http_body_util::Empty::new().boxed())
+        .expect("switching protocols response builder should not fail"))
+}
+
 /// Compare a WebSocket upgrade's Origin and Host headers. Returns true when
 /// there is no Origin header (non-browser clients) or when Origin's
 /// authority matches Host. A mismatched Origin is refused.
@@ -545,6 +591,13 @@ async fn serve(
                     .expect("forbidden response builder should not fail"));
             }
 
+            // Build (and validate) the handshake response before consuming the
+            // request for the upgrade future.
+            let response = match ws_handshake_response(&req) {
+                Ok(r) => r,
+                Err(reject) => return Ok(*reject),
+            };
+
             let on_upgrade = hyper::upgrade::on(req);
             num_clients.fetch_add(1, Ordering::Relaxed);
 
@@ -585,10 +638,7 @@ async fn serve(
                 }
             });
 
-            Ok(Response::builder()
-                .status(StatusCode::SWITCHING_PROTOCOLS)
-                .body("switching to websocket".to_string().boxed())
-                .expect("switching protocols response builder should not fail"))
+            Ok(response)
         }
         "/style.css" => Ok(response_from_path_or_default(
             context.web_config.custom_style_css.as_ref(),

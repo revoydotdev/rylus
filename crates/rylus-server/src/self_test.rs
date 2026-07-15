@@ -190,7 +190,24 @@ fn step_websocket(port: u16) -> Result<(), String> {
         ));
     }
 
-    info!("[self-test] step 3: got 101 Switching Protocols OK");
+    // RFC 6455 §4.2.2: the response MUST carry Sec-WebSocket-Accept derived
+    // from the request key, plus Upgrade/Connection headers. Browsers fail the
+    // connection without them, so a bare 101 is not a working handshake.
+    // "s3pPLMBiTxaQ9kYGzzhZRbK+xOo=" is the RFC's own sample accept value for
+    // the sample nonce sent above.
+    let response_lower = response.to_lowercase();
+    if !response.contains("s3pPLMBiTxaQ9kYGzzhZRbK+xOo=") {
+        server.stop();
+        return Err(format!(
+            "response missing/incorrect Sec-WebSocket-Accept header (browsers reject this): {response:?}"
+        ));
+    }
+    if !response_lower.contains("upgrade: websocket") {
+        server.stop();
+        return Err("response missing 'Upgrade: websocket' header".into());
+    }
+
+    info!("[self-test] step 3: got 101 Switching Protocols with valid accept key OK");
     server.stop();
     Ok(())
 }
