@@ -1,4 +1,3 @@
-pub mod compress;
 pub mod websocket;
 
 pub use websocket::{
