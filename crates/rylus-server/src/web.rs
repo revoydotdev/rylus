@@ -106,6 +106,8 @@ pub const LIB_JS: &str = std::include_str!("../../../www/static/lib.js");
 pub const SETTINGS_HTML: &str = std::include_str!("../../../www/static/settings.html");
 pub const SW_JS: &str = std::include_str!("../../../www/static/sw.js");
 pub const MANIFEST: &str = std::include_str!("../../../www/static/manifest.webmanifest");
+pub const APPLE_TOUCH_ICON: &[u8] =
+    std::include_bytes!("../../../www/static/apple-touch-icon.png");
 
 /// Maximum failed auth attempts per IP before rate limiting kicks in.
 const MAX_FAILED_ATTEMPTS: u32 = 5;
@@ -660,6 +662,13 @@ async fn serve(
             "application/manifest+json; charset=utf-8",
         )
         .map(|r| r.boxed())),
+        // Pre-auth like the manifest: iOS fetches the touch icon outside any
+        // authenticated session during Add to Home Screen.
+        "/apple-touch-icon.png" => Ok(Response::builder()
+            .status(StatusCode::OK)
+            .header("content-type", "image/png")
+            .body(Full::new(Bytes::from_static(APPLE_TOUCH_ICON)).boxed())
+            .expect("icon response builder should not fail")),
         _ => Ok(response_not_found().map(|r| r.boxed())),
     }
 }

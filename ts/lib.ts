@@ -1,6 +1,7 @@
 import {
     applyPressureCurve,
     calculateConnectionQuality,
+    createOnboardingOverlay,
     createPalmRejector,
     getQualityIndicatorColor,
     PRESSURE_PRESETS,
@@ -158,19 +159,6 @@ function fresh_canvas() {
     return canvas;
 }
 
-class Rect {
-    x: number;
-    y: number;
-    w: number;
-    h: number;
-}
-
-class CustomInputAreas {
-    mouse: Rect;
-    touch: Rect;
-    pen: Rect;
-}
-
 class Settings {
     webSocket: WebSocket;
     checks: Map<string, HTMLInputElement>;
@@ -185,7 +173,6 @@ class Settings {
     pressure_curve_select: HTMLSelectElement | null = null;
     pressure_curve_preset: PressurePreset = "linear";
     visible: boolean;
-    custom_input_areas: CustomInputAreas;
     settings: HTMLElement;
 
     constructor(webSocket: WebSocket) {
@@ -293,10 +280,6 @@ class Settings {
             this.toggle_energysaving((e.target as HTMLInputElement).checked);
         };
 
-        this.checks.get("enable_custom_input_areas").onchange = () => {
-            this.save_settings();
-        };
-
         this.frame_rate_input.onchange = () => this.save_settings();
         this.range_min_pressure.onchange = () => this.save_settings();
 
@@ -309,9 +292,6 @@ class Settings {
         this.frame_rate_input.onchange = upd_server_config;
 
         document.getElementById("refresh").onclick = () => wsSend('"GetCapturableList"');
-        document.getElementById("custom_input_areas").onclick = () => {
-            wsSend('"ChooseCustomInputAreas"');
-        };
         this.capturable_select.onchange = () => this.send_server_config();
     }
 
@@ -347,7 +327,6 @@ class Settings {
         settings["frame_rate"] = frame_rate_scale(this.frame_rate_input.valueAsNumber).toString();
         settings["scale_video"] = this.scale_video_input.value;
         settings["min_pressure"] = this.range_min_pressure.value;
-        settings["custom_input_areas"] = this.custom_input_areas;
         settings["client_name"] = this.client_name_input.value;
         settings["pressure_curve"] = this.pressure_curve_preset;
         localStorage.setItem("settings", JSON.stringify(settings));
@@ -389,8 +368,6 @@ class Settings {
             if (min_pressure)
                 this.range_min_pressure.value = min_pressure;
 
-            this.custom_input_areas = settings["custom_input_areas"];
-
             if (this.checks.get("lefty").checked) {
                 this.settings.classList.add("lefty");
             }
@@ -411,10 +388,6 @@ class Settings {
                 debug_overlay.classList.remove("hide");
             }
 
-
-            if (document.getElementById("custom_input_areas").classList.contains("hide")) {
-                this.checks.get("enable_custom_input_areas").checked = false;
-            }
 
             let client_name = settings["client_name"];
             if (client_name)
@@ -526,10 +499,24 @@ let last_pointer_data: Object;
 // a visible line the server never received.
 let active_painter: Painter | null = null;
 
+// The currently-active WebCodecs decode pipe (if any). Exposed at module
+// scope — like active_painter above — so the reconnect handler can close
+// the previous VideoDecoder before handle_messages() re-initializes decode
+// state. Browsers cap concurrent hardware decoder instances; leaving old
+// ones open across repeated reconnects eventually starves new ones.
+let webcodecs_pipe: WebCodecsPipe | null = null;
+
 // Palm rejection: kept at module scope so the 100ms suppression window
 // survives PointerHandler re-instantiation when the user toggles input
 // checkboxes. `createPalmRejector` is defined in utils.ts.
 const palm_rejector = createPalmRejector(100);
+
+/** Pure coordinate transform used by PEvent: normalizes a client-space
+ * position into the target rect's local [0,1] space. Exported so tests
+ * exercise the real transform instead of a hand-copied reimplementation. */
+export function computeNormalizedCoord(clientPos: number, rectStart: number, rectSize: number): number {
+    return (clientPos - rectStart) / rectSize;
+}
 
 class PEvent {
     event_type: string;
@@ -566,28 +553,8 @@ class PEvent {
             btn = 2;
         this.button = (btn < 0 ? 0 : 1 << btn);
         this.buttons = event.buttons;
-        let x_offset = 0;
-        let y_offset = 0;
-        let x_scale = 1;
-        let y_scale = 1;
-        if (settings.checks.get("enable_custom_input_areas").checked) {
-            let custom_input_area: Rect = null;
-            if (event.pointerType == "mouse") {
-                custom_input_area = settings.custom_input_areas.mouse;
-            } else if (event.pointerType == "touch") {
-                custom_input_area = settings.custom_input_areas.touch;
-            } else if (event.pointerType == "pen") {
-                custom_input_area = settings.custom_input_areas.pen;
-            }
-            if (custom_input_area) {
-                x_scale = custom_input_area.w;
-                y_scale = custom_input_area.h;
-                x_offset = custom_input_area.x;
-                y_offset = custom_input_area.y;
-            }
-        }
-        this.x = (event.clientX - targetRect.left) / targetRect.width * x_scale + x_offset;
-        this.y = (event.clientY - targetRect.top) / targetRect.height * y_scale + y_offset;
+        this.x = computeNormalizedCoord(event.clientX, targetRect.left, targetRect.width);
+        this.y = computeNormalizedCoord(event.clientY, targetRect.top, targetRect.height);
         // this.movement_x = event.movementX ? event.movementX : 0;
         // this.movement_y = event.movementY ? event.movementY : 0;
         let raw_pressure = event.pressure === 0 ? 0 : Math.max(event.pressure, settings.range_min_pressure.valueAsNumber);
@@ -678,6 +645,13 @@ class Painter {
     initialized: boolean;
     animFrameId: number;
 
+    // Number of trailing floats appended to each active line's vertex array
+    // by browser-predicted points (getPredictedEvents). Tracked per pointer
+    // so the next real batch can strip them before extending the line with
+    // ground truth — predicted points are a provisional rendering aid only
+    // and must never permanently distort the stroke geometry.
+    predicted_counts: Map<number, number>;
+
     constructor(canvas: HTMLCanvasElement) {
         this.canvas = canvas;
         canvas.width = window.innerWidth * window.devicePixelRatio;
@@ -686,6 +660,7 @@ class Painter {
         if (this.gl) {
             this.lines_active = new Map();
             this.lines_old = [];
+            this.predicted_counts = new Map();
             this.setupWebGL();
         }
     }
@@ -776,12 +751,15 @@ class Painter {
     cancel_all() {
         if (this.lines_active) this.lines_active.clear();
         if (this.lines_old) this.lines_old.length = 0;
+        if (this.predicted_counts) this.predicted_counts.clear();
         if (this.gl && this.initialized) {
             this.gl.clear(this.gl.COLOR_BUFFER_BIT);
         }
     }
 
-    appendEventToLine(event: PointerEvent) {
+    /** Returns the number of floats appended to the line's vertex array (0,
+     * 6, or 12), so callers can track and later strip a provisional tail. */
+    appendEventToLine(event: PointerEvent): number {
         let line = this.lines_active.get(event.pointerId);
         if (!line) {
             line = [null, []];
@@ -792,6 +770,7 @@ class Painter {
         let y = 1 - event.clientY * window.devicePixelRatio / this.canvas.height * 2;
         let delta = event.pressure + 0.4;
         let t = performance.now();
+        let pushed = 0;
         // to draw a line segment, there has to be some previous position
         if (line[0]) {
             let [x0, y0, delta0, t0] = line[0];
@@ -801,20 +780,24 @@ class Painter {
             let dy = -(x - x0);
             let dd = Math.sqrt(dx ** 2 + dy ** 2);
             if (dd == 0) {
-                return;
+                return 0;
             }
             dx = dx / dd * max_pixels / this.canvas.width * 0.004;
             dy = dy / dd * max_pixels / this.canvas.height * 0.004;
 
-            if (line[1].length == 0)
+            if (line[1].length == 0) {
                 line[1].push(
                     x0 + delta0 * dx, y0 + delta0 * dy, t0, x0 - delta0 * dx, y0 - delta0 * dy, t0,
                 );
+                pushed += 6;
+            }
             line[1].push(
                 x + delta * dx, y + delta * dy, t, x - delta * dx, y - delta * dy, t
             )
+            pushed += 6;
         }
         line[0] = [x, y, delta, t];
+        return pushed;
     }
 
     onstart(event: PointerEvent) {
@@ -822,12 +805,37 @@ class Painter {
     }
 
     onmove(event: PointerEvent) {
-        if (this.lines_active.has(event.pointerId)) {
-            const events = event.getCoalescedEvents?.() ?? [event];
-            for (const e of events) {
-                this.appendEventToLine(e);
-            }
+        const id = event.pointerId;
+        if (!this.lines_active.has(id)) return;
+
+        // Strip last frame's provisional predicted tail before extending
+        // the line with ground truth — it was only ever a rendering guess
+        // for the interval until this real batch arrived.
+        const line = this.lines_active.get(id);
+        const prevPredicted = this.predicted_counts.get(id) ?? 0;
+        if (prevPredicted > 0 && line) {
+            line[1].length = Math.max(0, line[1].length - prevPredicted);
         }
+        this.predicted_counts.set(id, 0);
+
+        const events = event.getCoalescedEvents?.() ?? [event];
+        for (const e of events) {
+            this.appendEventToLine(e);
+        }
+
+        // Extend the local ink preview with the browser's predicted points
+        // (short-horizon extrapolation of where the pen is headed). This is
+        // a purely local rendering aid to shave perceived latency off the
+        // leading edge of the stroke — predicted points are NEVER sent to
+        // the server (PointerHandler.onEvent only reads
+        // getCoalescedEvents/the raw event) and are superseded by the next
+        // real batch above. Not all browsers implement the API.
+        const predicted = event.getPredictedEvents?.() ?? [];
+        let predictedFloats = 0;
+        for (const e of predicted) {
+            predictedFloats += this.appendEventToLine(e);
+        }
+        this.predicted_counts.set(id, predictedFloats);
     }
 
     onstop(event: PointerEvent) {
@@ -837,6 +845,7 @@ class Painter {
                 this.lines_old.push(lines[1]);
             this.lines_active.delete(event.pointerId);
         }
+        this.predicted_counts.delete(event.pointerId);
     }
 }
 
@@ -860,6 +869,11 @@ class PointerHandler {
         video.onpointerover = (e) => this.onEvent(e, "pointerover");
 
         let painter: Painter;
+        // Destroy any previously-active Painter before replacing it — it
+        // owns a self-rearming requestAnimationFrame loop (Painter.render)
+        // that otherwise keeps running forever in the background every time
+        // a new PointerHandler is constructed (reconnect, settings toggle).
+        if (active_painter) active_painter.destroy();
         if (!settings.checks.get("energysaving").checked) {
             painter = new Painter(canvas as HTMLCanvasElement);
             active_painter = painter;
@@ -990,7 +1004,11 @@ class PointerHandler {
                     "PointerEvent": new PEvent(event_type, events[0], rect),
                 }));
             }
-            if (settings.visible) {
+            // Only actual contact should dismiss the settings panel — hover-
+            // generated events (Apple Pencil hover reports pointerover/
+            // pointermove with pointerType "pen" before the tip ever
+            // touches down) must not close it out from under the user.
+            if (event_type === "pointerdown" && settings.visible) {
                 settings.toggle();
             }
         }
@@ -1115,8 +1133,8 @@ function handle_messages(
     // and access units are fed straight to a VideoDecoder — skipping MSE's
     // container-level buffering shaves 20–50 ms of end-to-end latency. MSE
     // remains the fallback on Safari/older browsers that don't ship
-    // WebCodecs (VideoDecoder).
-    let webcodecs_pipe: WebCodecsPipe | null = null;
+    // WebCodecs (VideoDecoder). `webcodecs_pipe` itself lives at module
+    // scope (see declaration above) so the reconnect handler can close it.
     let webcodecs_canvas: HTMLCanvasElement | null = null;
     let webcodecs_decided = false;
     // Promise chain that avoids racing configure() with subsequent feed()s.
@@ -1274,10 +1292,6 @@ function handle_messages(
                     showToast(String(msg["Error"]), "error", 4000);
                 else if ("ConfigError" in msg) {
                     onConfigError(msg["ConfigError"]);
-                } else if ("CustomInputAreas" in msg) {
-                    settings.custom_input_areas = msg["CustomInputAreas"];
-                    settings.checks.get("enable_custom_input_areas").checked = true;
-                    settings.save_settings();
                 }
             }
 
@@ -1392,6 +1406,13 @@ function init() {
     check_apis();
     check_browser_quirks();
     register_service_worker();
+
+    // First-run onboarding: returns null (no-op) once the user has completed
+    // it, so this is safe to call unconditionally on every load.
+    const onboarding = createOnboardingOverlay();
+    if (onboarding) {
+        document.body.appendChild(onboarding);
+    }
 
     let protocol = document.location.protocol == "https:" ? "wss://" : "ws://";
     let webSocket = new WebSocket(
@@ -1633,6 +1654,14 @@ function init() {
             // stare at a black MSE buffer until the next natural GOP boundary.
             wsSend('"RequestKeyframe"')
 
+            // Close the previous WebCodecs decoder before handle_messages()
+            // below re-initializes decode state — otherwise its VideoDecoder
+            // is silently orphaned (never closed) every time we reconnect.
+            if (webcodecs_pipe) {
+                try { webcodecs_pipe.close() } catch (_e) {}
+                webcodecs_pipe = null
+            }
+
             // Re-wire message handling and input handlers
             handle_messages(newSocket, video, () => {
                 new KeyboardHandler(newSocket)
@@ -1662,9 +1691,13 @@ function init() {
         stop_heartbeat()
         // Drop any locally-drawn partial strokes — the server never saw the
         // tail of them, so keeping them on the canvas would create a false
-        // sense that the stroke had been delivered.
+        // sense that the stroke had been delivered. Also stop the render
+        // loop immediately rather than waiting for a replacement Painter to
+        // be constructed on reconnect — a dropped connection may never
+        // reconnect (see the failed-banner path), in which case nothing
+        // else would ever call destroy().
         if (active_painter) {
-            try { active_painter.cancel_all() } catch (_e) {}
+            try { active_painter.destroy(); active_painter.cancel_all() } catch (_e) {}
         }
         if (is_reconnecting) return
         is_reconnecting = true
