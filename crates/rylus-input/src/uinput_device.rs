@@ -205,7 +205,10 @@ pub struct UInputDevice {
     stylus: VirtualDevice,
     mouse: VirtualDevice,
     touch: VirtualDevice,
-    touches: [Option<MultiTouch>; 10],
+    // 5 slots (0..=4) to match the ABS_MT_SLOT range declared in
+    // create_touch() below. evdev has no BTN_TOOL_* code past QUINTTAP (5
+    // fingers), so 5 is the real ceiling regardless of array size.
+    touches: [Option<MultiTouch>; 5],
     tool_pen_active: bool,
     pen_touching: bool,
     last_pen_event: Instant,
@@ -308,6 +311,27 @@ impl UInputDevice {
                 _ => None,
             })
     }
+
+    /// Clears a stuck `BTN_TOOL_PEN` left asserted by browsers that report pen-hover
+    /// `pointermove`/`pointerover` but never fire a terminal "left proximity" event.
+    /// Time-gated by `last_pen_event`, so it's a no-op on most calls.
+    fn clear_stale_pen_hover(&mut self) {
+        if self.tool_pen_active
+            && !self.pen_touching
+            && (Instant::now() - self.last_pen_event) > Duration::from_millis(50)
+        {
+            self.tool_pen_active = false;
+            emit_events(
+                &mut self.stylus,
+                &[
+                    ev(EventType::KEY, EC_KEY_TOUCH, 0),
+                    ev(EventType::KEY, EC_KEY_TOOL_PEN, 0),
+                    ev(EventType::KEY, EC_KEY_TOOL_RUBBER, 0),
+                    ev(EventType::ABSOLUTE, EC_ABSOLUTE_PRESSURE, 0),
+                ],
+            );
+        }
+    }
 }
 
 // Event Codes (matching Linux input-event-codes.h)
@@ -322,6 +346,20 @@ const EC_KEY_TOOL_DOUBLETAP: c_int = 0x14d;
 const EC_KEY_TOOL_TRIPLETAP: c_int = 0x14e;
 const EC_KEY_TOOL_QUADTAP: c_int = 0x14f;
 const EC_KEY_TOOL_QUINTTAP: c_int = 0x148;
+
+/// Maps a live count of concurrently-active touches (1..=5) to the evdev
+/// BTN_TOOL_* key that represents it. evdev has no tool code past
+/// QUINTTAP, so counts above 5 saturate at QUINTTAP (this ceiling is
+/// enforced upstream: `UInputDevice.touches` only has 5 slots).
+fn tool_key_for_touch_count(count: usize) -> c_int {
+    match count {
+        1 => EC_KEY_TOOL_FINGER,
+        2 => EC_KEY_TOOL_DOUBLETAP,
+        3 => EC_KEY_TOOL_TRIPLETAP,
+        4 => EC_KEY_TOOL_QUADTAP,
+        _ => EC_KEY_TOOL_QUINTTAP,
+    }
+}
 
 const EC_REL_HWHEEL: c_int = 0x06;
 const EC_REL_WHEEL: c_int = 0x08;
@@ -410,6 +448,15 @@ impl InputDevice for UInputDevice {
         self.geometry.y = y;
         self.geometry.w = width;
         self.geometry.h = height;
+
+        // Workaround for browsers that send events when the pen is hovering but do not
+        // send an event when the pen leaves the hovering range. This must run for every
+        // incoming pointer event regardless of type — not just Touch — otherwise a
+        // touch-disabled session (a common drawing-workflow configuration) never clears
+        // a stuck BTN_TOOL_PEN, since no Touch event would ever arrive to trigger it.
+        // Cheap: it's already time-gated by last_pen_event.
+        self.clear_stale_pen_hover();
+
         match event.pointer_type {
             PointerType::Touch => {
                 #[cfg(feature = "x11")]
@@ -430,23 +477,6 @@ impl InputDevice for UInputDevice {
                     self.num_touch_mapping_tries += 1;
                 }
 
-                // Workaround for browsers that send events when the pen is hovering but
-                // do not send an event when the pen leaves the hovering range.
-                if self.tool_pen_active
-                    && !self.pen_touching
-                    && (Instant::now() - self.last_pen_event) > Duration::from_millis(50)
-                {
-                    self.tool_pen_active = false;
-                    emit_events(
-                        &mut self.stylus,
-                        &[
-                            ev(EventType::KEY, EC_KEY_TOUCH, 0),
-                            ev(EventType::KEY, EC_KEY_TOOL_PEN, 0),
-                            ev(EventType::KEY, EC_KEY_TOOL_RUBBER, 0),
-                            ev(EventType::ABSOLUTE, EC_ABSOLUTE_PRESSURE, 0),
-                        ],
-                    );
-                }
                 match event.event_type {
                     PointerEventType::DOWN
                     | PointerEventType::MOVE
@@ -479,20 +509,26 @@ impl InputDevice for UInputDevice {
 
                         if let PointerEventType::DOWN = event.event_type {
                             events.push(ev(EventType::KEY, EC_KEY_TOUCH, 1));
-                            match slot {
-                                1 => events.push(ev(EventType::KEY, EC_KEY_TOOL_FINGER, 0)),
-                                2 => events.push(ev(EventType::KEY, EC_KEY_TOOL_DOUBLETAP, 0)),
-                                3 => events.push(ev(EventType::KEY, EC_KEY_TOOL_TRIPLETAP, 0)),
-                                4 => events.push(ev(EventType::KEY, EC_KEY_TOOL_QUADTAP, 0)),
-                                _ => events.push(ev(EventType::KEY, EC_KEY_TOOL_QUINTTAP, 0)),
+                            // Derive the BTN_TOOL_* transition from the live
+                            // count of concurrently-active touches, not the
+                            // slot index — slots are recycled by
+                            // first-free-slot, so slot number stops tracking
+                            // finger count as soon as touches release out of
+                            // FIFO order.
+                            let active_count =
+                                self.touches.iter().filter(|t| t.is_some()).count();
+                            if active_count > 1 {
+                                events.push(ev(
+                                    EventType::KEY,
+                                    tool_key_for_touch_count(active_count - 1),
+                                    0,
+                                ));
                             }
-                            match slot {
-                                1 => events.push(ev(EventType::KEY, EC_KEY_TOOL_DOUBLETAP, 1)),
-                                2 => events.push(ev(EventType::KEY, EC_KEY_TOOL_TRIPLETAP, 1)),
-                                3 => events.push(ev(EventType::KEY, EC_KEY_TOOL_QUADTAP, 1)),
-                                4 => events.push(ev(EventType::KEY, EC_KEY_TOOL_QUINTTAP, 1)),
-                                _ => events.push(ev(EventType::KEY, EC_KEY_TOOL_FINGER, 1)),
-                            }
+                            events.push(ev(
+                                EventType::KEY,
+                                tool_key_for_touch_count(active_count),
+                                1,
+                            ));
                         }
 
                         // Pre-compute transform values to avoid borrow conflicts
@@ -529,18 +565,29 @@ impl InputDevice for UInputDevice {
                     | PointerEventType::LEAVE
                     | PointerEventType::OUT => {
                         if let Some(slot) = self.find_slot(event.pointer_id) {
+                            // Same live-count derivation as touch-down:
+                            // clear the tool key for the current count, and
+                            // if touches remain, re-assert the tool key for
+                            // the count after this one lifts.
+                            let count_before =
+                                self.touches.iter().filter(|t| t.is_some()).count();
                             let mut events = vec![
                                 ev(EventType::ABSOLUTE, EC_ABS_MT_SLOT, slot as i32),
                                 ev(EventType::ABSOLUTE, EC_ABS_MT_TRACKING_ID, -1),
                                 ev(EventType::KEY, EC_KEY_TOUCH, 0),
-                                ev(EventType::KEY, EC_KEY_TOOL_FINGER, 0),
+                                ev(
+                                    EventType::KEY,
+                                    tool_key_for_touch_count(count_before),
+                                    0,
+                                ),
                             ];
-                            match slot {
-                                1 => events.push(ev(EventType::KEY, EC_KEY_TOOL_DOUBLETAP, 0)),
-                                2 => events.push(ev(EventType::KEY, EC_KEY_TOOL_TRIPLETAP, 0)),
-                                3 => events.push(ev(EventType::KEY, EC_KEY_TOOL_QUADTAP, 0)),
-                                4 => events.push(ev(EventType::KEY, EC_KEY_TOOL_QUINTTAP, 0)),
-                                _ => (),
+                            let count_after = count_before - 1;
+                            if count_after >= 1 {
+                                events.push(ev(
+                                    EventType::KEY,
+                                    tool_key_for_touch_count(count_after),
+                                    1,
+                                ));
                             }
                             emit_events(&mut self.touch, &events);
                             self.touches[slot] = None;
@@ -979,11 +1026,15 @@ impl InputDevice for UInputDevice {
 // Pure math helpers extracted for testability.
 
 fn compute_transform_x(x: f64, geom_x: f64, geom_w: f64) -> i32 {
-    ((x * geom_w + geom_x) * ABS_MAX) as i32
+    // Clamp defensively: the protocol contract says x is 0.0..=1.0, but a
+    // client can historically send out-of-range values (e.g. a stale custom
+    // input area implementation scaling past the edge), and an unclamped
+    // result here would write an out-of-declared-range ABS_X value to uinput.
+    ((x * geom_w + geom_x).clamp(0.0, 1.0) * ABS_MAX) as i32
 }
 
 fn compute_transform_y(y: f64, geom_y: f64, geom_h: f64) -> i32 {
-    ((y * geom_h + geom_y) * ABS_MAX) as i32
+    ((y * geom_h + geom_y).clamp(0.0, 1.0) * ABS_MAX) as i32
 }
 
 fn compute_transform_pressure(p: f64) -> i32 {
@@ -1053,6 +1104,34 @@ mod tests {
         assert_eq!(compute_transform_y(1.0, 0.1, 0.8), 58981);
     }
 
+    #[test]
+    fn transform_x_clamps_above_one() {
+        // A stale/out-of-range client value must never exceed ABS_MAX.
+        assert_eq!(compute_transform_x(1.5, 0.0, 1.0), 65535);
+    }
+
+    #[test]
+    fn transform_x_clamps_below_zero() {
+        assert_eq!(compute_transform_x(-0.5, 0.0, 1.0), 0);
+    }
+
+    #[test]
+    fn transform_y_clamps_above_one() {
+        assert_eq!(compute_transform_y(1.5, 0.0, 1.0), 65535);
+    }
+
+    #[test]
+    fn transform_y_clamps_below_zero() {
+        assert_eq!(compute_transform_y(-0.5, 0.0, 1.0), 0);
+    }
+
+    #[test]
+    fn transform_x_clamps_when_geometry_pushes_past_range() {
+        // In-range x (0.9) combined with an offset geometry can still push
+        // the normalized result past 1.0 before ABS scaling.
+        assert_eq!(compute_transform_x(0.9, 0.5, 1.0), 65535);
+    }
+
     // ── Pressure transform ──────────────────────────────────────────
 
     #[test]
@@ -1082,19 +1161,21 @@ mod tests {
 
     // ── Multi-touch slot management ─────────────────────────────────
 
-    /// Helper: create a bare touches array for slot tests.
-    fn empty_touches() -> [Option<MultiTouch>; 10] {
+    /// Helper: create a bare touches array for slot tests. Sized to 5 to
+    /// match the real `UInputDevice.touches` field and the ABS_MT_SLOT
+    /// range (0..=4) declared in `create_touch()`.
+    fn empty_touches() -> [Option<MultiTouch>; 5] {
         Default::default()
     }
 
-    fn find_slot_in(touches: &[Option<MultiTouch>; 10], id: i64) -> Option<usize> {
+    fn find_slot_in(touches: &[Option<MultiTouch>; 5], id: i64) -> Option<usize> {
         touches.iter().enumerate().find_map(|(slot, mt)| match mt {
             Some(mt) if mt.id == id => Some(slot),
             _ => None,
         })
     }
 
-    fn allocate_slot(touches: &mut [Option<MultiTouch>; 10], id: i64) -> Option<usize> {
+    fn allocate_slot(touches: &mut [Option<MultiTouch>; 5], id: i64) -> Option<usize> {
         if let Some(existing) = find_slot_in(touches, id) {
             return Some(existing);
         }
@@ -1143,11 +1224,49 @@ mod tests {
     #[test]
     fn slot_limit_exhaustion() {
         let mut touches = empty_touches();
-        for i in 0..10 {
+        for i in 0..5 {
             assert_eq!(allocate_slot(&mut touches, i), Some(i as usize));
         }
-        // All 10 slots occupied; 11th allocation fails
+        // All 5 slots occupied (matching the declared ABS_MT_SLOT max of 4);
+        // a 6th touch is gracefully ignored rather than allocated out of range.
         assert_eq!(allocate_slot(&mut touches, 999), None);
+    }
+
+    // ── BTN_TOOL_* live-count derivation ──────────────────────────────
+
+    #[test]
+    fn tool_key_for_touch_count_maps_one_through_five() {
+        assert_eq!(tool_key_for_touch_count(1), EC_KEY_TOOL_FINGER);
+        assert_eq!(tool_key_for_touch_count(2), EC_KEY_TOOL_DOUBLETAP);
+        assert_eq!(tool_key_for_touch_count(3), EC_KEY_TOOL_TRIPLETAP);
+        assert_eq!(tool_key_for_touch_count(4), EC_KEY_TOOL_QUADTAP);
+        assert_eq!(tool_key_for_touch_count(5), EC_KEY_TOOL_QUINTTAP);
+    }
+
+    #[test]
+    fn tool_key_for_touch_count_saturates_at_quinttap() {
+        // No evdev tool code exists past 5 fingers; anything higher (should
+        // be unreachable given the 5-slot ceiling) saturates rather than
+        // panicking or wrapping.
+        assert_eq!(tool_key_for_touch_count(6), EC_KEY_TOOL_QUINTTAP);
+    }
+
+    #[test]
+    fn tool_transition_survives_out_of_fifo_release() {
+        // Reproduces the scenario from the audit: touch A down (slot 0),
+        // touch B down (slot 1) -> 2-finger gesture. A lifts (slot 0
+        // freed). Touch C lands and is allocated slot 0 (first free slot).
+        // The live touch count — not the slot index C landed in — must
+        // still report 2 concurrent fingers.
+        let mut touches = empty_touches();
+        allocate_slot(&mut touches, 1); // A -> slot 0
+        allocate_slot(&mut touches, 2); // B -> slot 1
+        touches[0] = None; // A lifts, slot 0 freed
+        allocate_slot(&mut touches, 3); // C -> reuses slot 0
+
+        let active_count = touches.iter().filter(|t| t.is_some()).count();
+        assert_eq!(active_count, 2);
+        assert_eq!(tool_key_for_touch_count(active_count), EC_KEY_TOOL_DOUBLETAP);
     }
 
     // ── Error mapping ───────────────────────────────────────────────
