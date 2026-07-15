@@ -5,9 +5,37 @@ use tracing::info;
 
 /// Generate a self-signed certificate and private key (PKCS#8 DER).
 /// Returns `(cert_der, key_der)`.
+///
+/// The certificate carries Subject Alternative Names for the machine's
+/// hostname, `<hostname>.local`, `localhost`, and every local IP address:
+/// iOS/Safari refuse to trust a certificate whose SANs don't cover the URL
+/// host, even when the user manually installs it. Validity is capped at two
+/// years — Apple platforms reject TLS server certificates valid for more
+/// than 825 days.
 pub fn generate_self_signed_cert() -> Result<(Vec<u8>, Vec<u8>), rcgen::Error> {
     let key_pair = rcgen::KeyPair::generate()?;
-    let cert_params = rcgen::CertificateParams::default();
+
+    let mut san: Vec<String> = vec!["localhost".to_string()];
+    if let Ok(host) = hostname::get() {
+        let host = host.to_string_lossy().to_string();
+        san.push(format!("{host}.local"));
+        san.push(host);
+    }
+    let mut cert_params = rcgen::CertificateParams::new(san)?;
+    if let Ok(ifaces) = if_addrs::get_if_addrs() {
+        for iface in ifaces {
+            cert_params
+                .subject_alt_names
+                .push(rcgen::SanType::IpAddress(iface.ip()));
+        }
+    }
+    cert_params
+        .distinguished_name
+        .push(rcgen::DnType::CommonName, "Rylus");
+    let now = time::OffsetDateTime::now_utc();
+    cert_params.not_before = now - time::Duration::days(1);
+    cert_params.not_after = now + time::Duration::days(730);
+
     let cert = cert_params.self_signed(&key_pair)?;
     Ok((cert.der().to_vec(), key_pair.serialize_der()))
 }

@@ -91,15 +91,9 @@ fn main() {
 }
 
 fn run_headless(conf: Config) {
+    // mDNS registration happens inside Rylus::start — registering here too
+    // would advertise the same instance name from two daemons.
     let mut rylus_server = rylus::Rylus::new();
-    let mut mdns_publisher = if !conf.no_mdns {
-        Some(mdns::MdnsPublisher::new())
-    } else {
-        None
-    };
-    if let Some(ref mut publisher) = mdns_publisher {
-        publisher.register(conf.web_port, None).ok();
-    }
     if !rylus_server.start(
         &conf,
         Box::new(|msg| match msg {
