@@ -22,6 +22,20 @@ ws[s]://<host>:<port>/ws
 The scheme matches the page protocol — the client selects `ws://` for plain
 HTTP and `wss://` for HTTPS connections (`ts/lib.ts`, lines 1396–1399).
 
+### HTTP Upgrade
+
+The upgrade follows RFC 6455: the server validates `Sec-WebSocket-Version: 13`
+(else `426 Upgrade Required`) and `Sec-WebSocket-Key` (else `400`), and
+responds `101 Switching Protocols` with `Upgrade: websocket`,
+`Connection: Upgrade`, and the derived `Sec-WebSocket-Accept` header
+(`ws_handshake_response`, `crates/rylus-server/src/web.rs`). Authentication
+(session cookie) and the Origin check run before the handshake response is
+built; a missing `Origin` header is accepted for non-browser clients.
+
+Inbound messages are capped at 64 KiB at the protocol level
+(`max_message_size`/`max_frame_size`); the video direction is outbound-only
+and unaffected.
+
 ### TLS
 
 **Source:** `crates/rylus-server/src/tls.rs`, `crates/rylus-server/src/web.rs`

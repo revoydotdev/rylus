@@ -71,6 +71,26 @@ land when they're ready.
 
 ---
 
+### Performance & fidelity (post-audit backlog)
+
+Identified by the July 2026 full-codebase audit and prior-art study
+([`docs/adr/0001`](adr/0001-websocket-transport-for-v1.md) records the
+transport decision):
+
+- [ ] **Zero-copy Wayland pipeline.** DMA-BUF modifier negotiation, persistent
+      buffer mapping, and DRM import straight into VAAPI surfaces — removes at
+      least two full-frame CPU copies per frame, the largest structural latency
+      ceiling in the current stack.
+- [ ] **Real custom input area picker.** The non-functional egui-era stub was
+      removed; the replacement should be client-side rect selection over the
+      video stream, not a native overlay.
+- [ ] **HDR/10-bit capture.** Non-8bpc PipeWire formats currently drop every
+      buffer silently; at minimum surface an actionable error, ideally negotiate
+      down or convert.
+- [ ] **Per-stage latency HUD** (capture → encode → wire → decode → present),
+      in the spirit of Sunshine/Moonlight's overlay, to anchor tuning against
+      the ~7 ms perceptual threshold established for stylus inking.
+
 ## Out of scope (deliberate)
 
 - Native iOS / Android apps — the browser PWA is the only client we ship.
@@ -107,6 +127,26 @@ priority = "MED"
 [[todo]]
 line = "Tag v1.0.0 (signed annotated tag, GitHub release with artifacts, AUR rylus-bin update)"
 difficulty = 15
+priority = "LOW"
+
+[[todo]]
+line = "Zero-copy Wayland pipeline: DMA-BUF modifier negotiation, persistent mmap, DRM import into VAAPI (drops >=2 full-frame copies per frame; top structural latency ceiling per 2026 audit)"
+difficulty = 75
+priority = "MED"
+
+[[todo]]
+line = "Real custom input area picker (client-side rect selection over the video stream; server/gui stub removed 2026-07 as fake-success placeholder)"
+difficulty = 40
+priority = "LOW"
+
+[[todo]]
+line = "HDR/10-bit capture formats: currently every non-8bpc PipeWire format drops all buffers silently (black stream, no diagnostic)"
+difficulty = 45
+priority = "LOW"
+
+[[todo]]
+line = "Per-stage latency HUD (capture->encode->wire->decode->present), Sunshine-style; anchors the <=7ms perceptual budget from CHI 2014"
+difficulty = 30
 priority = "LOW"
 ```
 <!-- revoy:end -->
