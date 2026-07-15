@@ -1,11 +1,23 @@
 /// Latency budget benchmark harness for rylus.
 ///
 /// Targets:
-///   1. Software H.264 encode — VideoEncoder init + encode one synthetic BGR0 frame
-///      via libx264 (the `--self-test` path, display-free).
-///   2. Protocol message serialization — serde_json serialize of representative
+///   1. Encoder construction — `VideoEncoder::new()` alone (codec probe, filter
+///      graph construction) via libx264, display-free. Paid once per session.
+///   2. Steady-state per-frame encode — one `VideoEncoder`, encode N frames of
+///      synthetic BGR0 via libx264, median over frames [2, N) so first-GOP /
+///      pipeline warm-up doesn't skew the number that actually matters for the
+///      product's stylus-latency budget: steady-state per-frame cost.
+///   3. Protocol message serialization — serde_json serialize of representative
 ///      MessageOutbound variants (HeartbeatAck, CapturableList, VideoInit, Hello).
-///   3. Protocol message deserialization — serde_json deserialize of the same messages.
+///   4. Protocol message deserialization — serde_json deserialize of the same messages.
+///
+/// (1) and (2) used to be a single "encode_frame" target that timed
+/// `VideoEncoder::new()` + one `encode()` call together. That conflated
+/// one-time construction cost with steady-state per-frame cost — in
+/// production the encoder is built once per session and reused for
+/// thousands of frames, so a regression in construction (e.g. codec probing)
+/// could trip, or mask, the same budget as a regression in per-frame encode
+/// time. Splitting them makes each budget mean what its name says.
 ///
 /// All targets are deterministic CPU paths with no hardware, display, or network
 /// dependency. Input events (rylus-input) are omitted: the device trait requires
@@ -27,19 +39,27 @@ use rylus_encode::{EncoderOptions, VideoEncoder};
 // ============================================================
 // Budget ceilings (µs)
 //
-// Derivation: run the bench in release mode, observe median, multiply by 3.
-// "encode_frame_us" budget of 30 000 µs (30 ms) is generous for libx264
-// ultrafast/zerolatency at 64x64; observed ~5–15 ms on x86_64.
-// "proto_ser_us" budget of 100 µs covers typical JSON serialize; observed <10 µs.
-// "proto_de_us"  budget of 100 µs covers typical JSON deserialize; observed <10 µs.
+// Derivation: run the bench in release mode, observe median, multiply by 3
+// (see each constant below for its specific derivation).
 // ============================================================
 
 mod budgets {
-    /// Maximum allowed median latency (µs) for one software H.264 encode call
-    /// (VideoEncoder::new + encode one 64x64 BGR0 frame with libx264 ultrafast).
-    /// Observed median on CI: ~8 000 µs. Budget = 3× = 24 000, rounded to 30 000
-    /// for headroom against loaded CI runners.
-    pub const ENCODE_FRAME_US: u64 = 30_000;
+    /// Maximum allowed median latency (µs) for `VideoEncoder::new()` alone
+    /// (codec probe + filter graph construction for libx264, 64x64). Paid
+    /// once per session, not per frame.
+    /// Observed median (dev workstation, release build): ~2 900 µs. Budget =
+    /// 3× ~= 8 700, rounded up to 15 000 for headroom against the (slower,
+    /// self-hosted) CI runner and to give this newly-split metric a first
+    /// CI run before tightening.
+    pub const ENCODER_INIT_US: u64 = 15_000;
+
+    /// Maximum allowed median latency (µs) for one steady-state software
+    /// H.264 encode call (`encode()` on an already-constructed 64x64
+    /// libx264 ultrafast/zerolatency encoder, median of frames [2, N)).
+    /// Observed median (dev workstation, release build): ~35 µs. Budget
+    /// rounded up generously to 2 000 for headroom against the CI runner and
+    /// to give this newly-split metric a first CI run before tightening.
+    pub const ENCODE_FRAME_US: u64 = 2_000;
 
     /// Maximum allowed median latency (µs) for serializing one representative
     /// outbound protocol message to JSON (serde_json::to_string).
@@ -102,14 +122,15 @@ fn make_bgr0_frame(width: usize, height: usize) -> Vec<u8> {
     buf
 }
 
-fn bench_encode(warmup: usize, iters: usize) -> Vec<u64> {
-    let frame = make_bgr0_frame(64, 64);
+/// Time `VideoEncoder::new()` alone — the one-time-per-session construction
+/// cost (codec probe, filter graph setup). Excludes any `encode()` call.
+fn bench_encoder_init(warmup: usize, iters: usize) -> Vec<u64> {
     let options = EncoderOptions::default(); // software libx264, no HW
 
     // Warmup: discard timings
     for _ in 0..warmup {
         let output = std::sync::Mutex::new(Vec::<u8>::new());
-        if let Ok(mut enc) = VideoEncoder::new(
+        let _ = VideoEncoder::new(
             64,
             64,
             64,
@@ -118,18 +139,14 @@ fn bench_encode(warmup: usize, iters: usize) -> Vec<u64> {
                 output.lock().unwrap().extend_from_slice(data);
             },
             options,
-        ) {
-            enc.encode(PixelProvider::BGR0(64, 64, &frame));
-        }
+        );
     }
 
-    // Measured iterations: each iteration creates the encoder AND encodes one frame,
-    // mirroring the self-test path (init + one frame).
     let mut samples = Vec::with_capacity(iters);
     for _ in 0..iters {
         let output = std::sync::Mutex::new(Vec::<u8>::new());
         let t0 = Instant::now();
-        if let Ok(mut enc) = VideoEncoder::new(
+        let enc = VideoEncoder::new(
             64,
             64,
             64,
@@ -138,10 +155,49 @@ fn bench_encode(warmup: usize, iters: usize) -> Vec<u64> {
                 output.lock().unwrap().extend_from_slice(data);
             },
             options,
-        ) {
-            enc.encode(PixelProvider::BGR0(64, 64, &frame));
-        }
+        );
         samples.push(t0.elapsed().as_micros() as u64);
+        drop(enc);
+    }
+    samples
+}
+
+/// Time steady-state per-frame `encode()` cost on a single, already-
+/// constructed encoder — what actually matters in production, where the
+/// encoder is built once per session and reused for thousands of frames.
+///
+/// Encodes `frames` frames and returns the elapsed time of frames `[2,
+/// frames)`; the first two are discarded so first-GOP / pipeline warm-up
+/// doesn't skew the steady-state number. Requires `frames >= 30` so the
+/// discarded warm-up frames are a small fraction of the sample.
+fn bench_encode_frame(frames: usize) -> Vec<u64> {
+    assert!(
+        frames >= 30,
+        "bench_encode_frame needs frames >= 30 to isolate steady state"
+    );
+    let frame = make_bgr0_frame(64, 64);
+    let options = EncoderOptions::default(); // software libx264, no HW
+    let output = std::sync::Mutex::new(Vec::<u8>::new());
+    let mut enc = VideoEncoder::new(
+        64,
+        64,
+        64,
+        64,
+        move |data| {
+            output.lock().unwrap().extend_from_slice(data);
+        },
+        options,
+    )
+    .expect("encoder should init for steady-state encode bench");
+
+    let mut samples = Vec::with_capacity(frames - 2);
+    for i in 0..frames {
+        let t0 = Instant::now();
+        enc.encode(PixelProvider::BGR0(64, 64, &frame));
+        let elapsed = t0.elapsed().as_micros() as u64;
+        if i >= 2 {
+            samples.push(elapsed);
+        }
     }
     samples
 }
@@ -268,13 +324,21 @@ fn main() {
 
     const WARMUP: usize = 3;
     const ITERS: usize = 20;
+    const ENCODE_FRAMES: usize = 32; // >= 30; frames [2, 32) are the measured sample
 
-    let encode_samples = bench_encode(WARMUP, ITERS);
+    let init_samples = bench_encoder_init(WARMUP, ITERS);
+    let encode_samples = bench_encode_frame(ENCODE_FRAMES);
     let proto_ser_samples = bench_proto_ser(WARMUP, 200);
     let proto_de_samples = bench_proto_de(WARMUP, 200);
 
     println!();
     let mut all_pass = true;
+
+    let init_med = median_us(init_samples.clone());
+    let init_mean = mean_us(&init_samples);
+    if !report("encoder_init", init_med, init_mean, budgets::ENCODER_INIT_US) {
+        all_pass = false;
+    }
 
     let enc_med = median_us(encode_samples.clone());
     let enc_mean = mean_us(&encode_samples);
