@@ -106,8 +106,7 @@ pub const LIB_JS: &str = std::include_str!("../../../www/static/lib.js");
 pub const SETTINGS_HTML: &str = std::include_str!("../../../www/static/settings.html");
 pub const SW_JS: &str = std::include_str!("../../../www/static/sw.js");
 pub const MANIFEST: &str = std::include_str!("../../../www/static/manifest.webmanifest");
-pub const APPLE_TOUCH_ICON: &[u8] =
-    std::include_bytes!("../../../www/static/apple-touch-icon.png");
+pub const APPLE_TOUCH_ICON: &[u8] = std::include_bytes!("../../../www/static/apple-touch-icon.png");
 
 /// Maximum failed auth attempts per IP before rate limiting kicks in.
 const MAX_FAILED_ATTEMPTS: u32 = 5;
@@ -473,7 +472,11 @@ async fn serve(
                 if !code.is_empty() && verify_access_code(code, access_code_hash) {
                     let token = context.session_store.create_session();
                     debug!(address = ?addr, "Client authenticated via POST.");
-                    let secure = if context.secure_cookies { "; Secure" } else { "" };
+                    let secure = if context.secure_cookies {
+                        "; Secure"
+                    } else {
+                        ""
+                    };
                     return Ok(Response::builder()
                         .status(StatusCode::SEE_OTHER)
                         .header("location", "/")
@@ -601,8 +604,8 @@ async fn serve(
                             // Decrement even if the handler panics — otherwise
                             // server shutdown waits forever on a client count
                             // that can no longer reach zero.
-                            let result = std::panic::catch_unwind(
-                                std::panic::AssertUnwindSafe(move || {
+                            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(
+                                move || {
                                     let client = RylusClientHandler::new(
                                         sender,
                                         receiver,
@@ -618,8 +621,8 @@ async fn serve(
                                         config,
                                     );
                                     client.run();
-                                }),
-                            );
+                                },
+                            ));
                             if result.is_err() {
                                 error!("Client handler thread panicked.");
                             }
@@ -797,8 +800,7 @@ async fn handle_post_config(
         config.access_code = code;
         if rotated {
             info!("Access code rotated; invalidating all active sessions.");
-            *context.access_code_hash.write() =
-                config.access_code.as_deref().map(hash_access_code);
+            *context.access_code_hash.write() = config.access_code.as_deref().map(hash_access_code);
             context.session_store.clear();
         }
     }
@@ -1266,8 +1268,14 @@ mod tests {
 
     #[test]
     fn web_server_config_no_access_code() {
-        let config =
-            WebServerConfig::new("127.0.0.1:8080".parse().unwrap(), None, None, None, None, None);
+        let config = WebServerConfig::new(
+            "127.0.0.1:8080".parse().unwrap(),
+            None,
+            None,
+            None,
+            None,
+            None,
+        );
         assert!(config.access_code_hash.is_none());
     }
 

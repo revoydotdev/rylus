@@ -515,8 +515,7 @@ impl InputDevice for UInputDevice {
                             // first-free-slot, so slot number stops tracking
                             // finger count as soon as touches release out of
                             // FIFO order.
-                            let active_count =
-                                self.touches.iter().filter(|t| t.is_some()).count();
+                            let active_count = self.touches.iter().filter(|t| t.is_some()).count();
                             if active_count > 1 {
                                 events.push(ev(
                                     EventType::KEY,
@@ -569,17 +568,12 @@ impl InputDevice for UInputDevice {
                             // clear the tool key for the current count, and
                             // if touches remain, re-assert the tool key for
                             // the count after this one lifts.
-                            let count_before =
-                                self.touches.iter().filter(|t| t.is_some()).count();
+                            let count_before = self.touches.iter().filter(|t| t.is_some()).count();
                             let mut events = vec![
                                 ev(EventType::ABSOLUTE, EC_ABS_MT_SLOT, slot as i32),
                                 ev(EventType::ABSOLUTE, EC_ABS_MT_TRACKING_ID, -1),
                                 ev(EventType::KEY, EC_KEY_TOUCH, 0),
-                                ev(
-                                    EventType::KEY,
-                                    tool_key_for_touch_count(count_before),
-                                    0,
-                                ),
+                                ev(EventType::KEY, tool_key_for_touch_count(count_before), 0),
                             ];
                             let count_after = count_before - 1;
                             if count_after >= 1 {
@@ -1266,7 +1260,10 @@ mod tests {
 
         let active_count = touches.iter().filter(|t| t.is_some()).count();
         assert_eq!(active_count, 2);
-        assert_eq!(tool_key_for_touch_count(active_count), EC_KEY_TOOL_DOUBLETAP);
+        assert_eq!(
+            tool_key_for_touch_count(active_count),
+            EC_KEY_TOOL_DOUBLETAP
+        );
     }
 
     // ── Error mapping ───────────────────────────────────────────────

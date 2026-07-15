@@ -228,9 +228,7 @@ fn run_self_test() -> Result<(), String> {
 pub fn run() {
     std::thread::spawn(|| {
         std::thread::sleep(Duration::from_secs(SELF_TEST_TIMEOUT_SECS));
-        eprintln!(
-            "FAIL: rylus-server --self-test timed out after {SELF_TEST_TIMEOUT_SECS}s"
-        );
+        eprintln!("FAIL: rylus-server --self-test timed out after {SELF_TEST_TIMEOUT_SECS}s");
         std::process::exit(1);
     });
 

@@ -336,7 +336,12 @@ fn main() {
 
     let init_med = median_us(init_samples.clone());
     let init_mean = mean_us(&init_samples);
-    if !report("encoder_init", init_med, init_mean, budgets::ENCODER_INIT_US) {
+    if !report(
+        "encoder_init",
+        init_med,
+        init_mean,
+        budgets::ENCODER_INIT_US,
+    ) {
         all_pass = false;
     }
 

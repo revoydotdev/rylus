@@ -153,8 +153,7 @@ impl<S, R, FnUInput> RylusClientHandler<S, R, FnUInput> {
                             }
                         }
                         MessageInbound::ClientRtt { rtt_ms } => {
-                            if let Err(e) =
-                                self.video_sender.send(VideoCommands::ClientRtt(rtt_ms))
+                            if let Err(e) = self.video_sender.send(VideoCommands::ClientRtt(rtt_ms))
                             {
                                 warn!("Failed to send ClientRtt to video thread: {e}");
                             }
@@ -174,8 +173,7 @@ impl<S, R, FnUInput> RylusClientHandler<S, R, FnUInput> {
                             // migration; until a real picker ships, tell the client the
                             // truth instead of returning a fake full-screen selection.
                             self.send_message(MessageOutbound::ConfigError(
-                                "Custom input areas are not available in this version."
-                                    .to_string(),
+                                "Custom input areas are not available in this version.".to_string(),
                             ));
                         }
                     }
@@ -435,10 +433,8 @@ fn encode_thread<S: RylusSender + Clone + Send + 'static>(
                 enc.encode(owned.as_provider());
                 // Publish the real encode duration so the capture thread's
                 // quality controller sees encoder saturation, not capture cost.
-                last_encode_nanos.store(
-                    encode_start.elapsed().as_nanos() as u64,
-                    Ordering::Relaxed,
-                );
+                last_encode_nanos
+                    .store(encode_start.elapsed().as_nanos() as u64, Ordering::Relaxed);
                 let _ = buffer_return_tx.try_send(owned.into_buffer());
             }
             EncodeCommand::Restart {
@@ -847,8 +843,7 @@ fn handle_video<S: RylusSender + Clone + Send + 'static>(
                         pending_keyframe = false;
                         // Feed the encode thread's real per-frame duration into
                         // the quality controller (0 until the first frame lands).
-                        let encode_secs =
-                            last_encode_nanos.load(Ordering::Relaxed) as f64 / 1e9;
+                        let encode_secs = last_encode_nanos.load(Ordering::Relaxed) as f64 / 1e9;
                         if encode_secs > 0.0 {
                             quality.record_encode_time(encode_secs);
                         }
@@ -1048,5 +1043,4 @@ mod tests {
         let result = qc.decide(10.0);
         assert!(result.is_none());
     }
-
 }

@@ -1,6 +1,6 @@
-use std::path::Path;
 #[cfg(unix)]
 use std::io::Write as _;
+use std::path::Path;
 use tracing::info;
 
 /// Generate a self-signed certificate and private key (PKCS#8 DER).
@@ -167,14 +167,22 @@ mod tests {
             .permissions()
             .mode()
             & 0o777;
-        assert_eq!(key_mode, 0o600, "key file must be mode 0600, got {:o}", key_mode);
+        assert_eq!(
+            key_mode, 0o600,
+            "key file must be mode 0600, got {:o}",
+            key_mode
+        );
 
         let dir_mode = std::fs::metadata(&dir)
             .expect("cert dir must exist")
             .permissions()
             .mode()
             & 0o777;
-        assert_eq!(dir_mode, 0o700, "cert dir must be mode 0700, got {:o}", dir_mode);
+        assert_eq!(
+            dir_mode, 0o700,
+            "cert dir must be mode 0700, got {:o}",
+            dir_mode
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }

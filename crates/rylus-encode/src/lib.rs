@@ -957,24 +957,9 @@ impl VideoEncoder {
                     // async_depth=1 forces single-frame encoder pipeline; low_power uses
                     // the fixed-function VDENC path on Intel/AMD which has lower latency
                     // and frees the EU shader array. Both cut 1–2 frames of pipeline depth.
-                    ffi::av_opt_set(
-                        (*c).priv_data,
-                        c"async_depth".as_ptr(),
-                        c"1".as_ptr(),
-                        0,
-                    );
-                    ffi::av_opt_set(
-                        (*c).priv_data,
-                        c"low_power".as_ptr(),
-                        c"1".as_ptr(),
-                        0,
-                    );
-                    ffi::av_opt_set(
-                        (*c).priv_data,
-                        c"idr_interval".as_ptr(),
-                        c"0".as_ptr(),
-                        0,
-                    );
+                    ffi::av_opt_set((*c).priv_data, c"async_depth".as_ptr(), c"1".as_ptr(), 0);
+                    ffi::av_opt_set((*c).priv_data, c"low_power".as_ptr(), c"1".as_ptr(), 0);
+                    ffi::av_opt_set((*c).priv_data, c"idr_interval".as_ptr(), c"0".as_ptr(), 0);
                 },
             )
         }
@@ -1043,28 +1028,13 @@ impl VideoEncoder {
                     ffi::av_opt_set((*c).priv_data, c"cq".as_ptr(), c"21".as_ptr(), 0);
                     ffi::av_opt_set((*c).priv_data, c"delay".as_ptr(), c"0".as_ptr(), 0);
                     // Lookahead buys quality at the cost of latency; kill it for screen share.
-                    ffi::av_opt_set(
-                        (*c).priv_data,
-                        c"rc-lookahead".as_ptr(),
-                        c"0".as_ptr(),
-                        0,
-                    );
+                    ffi::av_opt_set((*c).priv_data, c"rc-lookahead".as_ptr(), c"0".as_ptr(), 0);
                     // Keep GOP cadence deterministic so the client can time
                     // recovery windows; disable scene-cut injection.
-                    ffi::av_opt_set(
-                        (*c).priv_data,
-                        c"no-scenecut".as_ptr(),
-                        c"1".as_ptr(),
-                        0,
-                    );
+                    ffi::av_opt_set((*c).priv_data, c"no-scenecut".as_ptr(), c"1".as_ptr(), 0);
                     // Needed for the RequestKeyframe path to actually emit an IDR
                     // instead of just a non-IDR recovery point.
-                    ffi::av_opt_set(
-                        (*c).priv_data,
-                        c"forced-idr".as_ptr(),
-                        c"1".as_ptr(),
-                        0,
-                    );
+                    ffi::av_opt_set((*c).priv_data, c"forced-idr".as_ptr(), c"1".as_ptr(), 0);
                 },
             )
         }

@@ -101,11 +101,10 @@ impl Recorder for CaptrsRecorder {
         // SAFETY: pointer + length come from a valid `&[Bgr8]` whose layout is
         // a contiguous run of 4 `u8` per element. Lifetime is tied to `&self`
         // via the returned reference, which the borrow checker enforces.
-        let bytes: &[u8] = unsafe { std::slice::from_raw_parts(self.byte_view_ptr, self.byte_view_len) };
+        let bytes: &[u8] =
+            unsafe { std::slice::from_raw_parts(self.byte_view_ptr, self.byte_view_len) };
         Ok(rylus_core::pixel::PixelProvider::BGR0(
-            w as usize,
-            h as usize,
-            bytes,
+            w as usize, h as usize, bytes,
         ))
     }
 }
