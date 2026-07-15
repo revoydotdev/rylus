@@ -709,6 +709,26 @@ fn bytes_per_pixel(format: VideoFormat) -> usize {
     }
 }
 
+/// De-pad a row-strided buffer in place, compacting each row from `stride`
+/// bytes down to `tight_stride` bytes. `PixelProvider::RGB0` has no strided
+/// variant (unlike `BGR0`/`BGR0S`), so a non-tight RGBx/RGBA buffer must be
+/// compacted before it can be wrapped as `RGB0` — otherwise rows after the
+/// first are read from the wrong byte offset by every consumer, which treats
+/// `RGB0` as unconditionally tightly packed. Safe to do in place: rows only
+/// ever move toward the front of the buffer, so `dst <= src` for every row.
+/// No-op if the buffer is already tightly packed.
+fn depad_rows_in_place(buf: &mut Vec<u8>, h: usize, stride: usize, tight_stride: usize) {
+    if stride == tight_stride {
+        return;
+    }
+    for row in 1..h {
+        let src = row * stride;
+        let dst = row * tight_stride;
+        buf.copy_within(src..src + tight_stride, dst);
+    }
+    buf.truncate(h * tight_stride);
+}
+
 impl Recorder for PipeWireRecorder {
     fn capture(&mut self) -> Result<PixelProvider<'_>, Box<dyn Error>> {
         // Check if the PipeWire stream has entered an error state before iterating.
@@ -764,7 +784,6 @@ impl Recorder for PipeWireRecorder {
             return Err(Box::new(PipeWireError("No buffer available!".into())));
         }
 
-        let buf = self.frame_buffer.as_slice();
         let w = self.width;
         let h = self.height;
         let stride = self.stride;
@@ -776,6 +795,7 @@ impl Recorder for PipeWireRecorder {
 
         match self.video_format {
             VideoFormat::BGRx | VideoFormat::BGRA => {
+                let buf = self.frame_buffer.as_slice();
                 if stride == tight_stride {
                     Ok(PixelProvider::BGR0(w, h, buf))
                 } else {
@@ -783,14 +803,13 @@ impl Recorder for PipeWireRecorder {
                 }
             }
             VideoFormat::RGBx | VideoFormat::RGBA => {
-                if stride == tight_stride {
-                    Ok(PixelProvider::RGB0(w, h, buf))
-                } else {
-                    // RGB0 with stride - no strided variant available, so strip padding.
-                    // Copy rows without stride padding into a contiguous buffer.
-                    // This is a fallback; normally PipeWire will give tight strides.
-                    Ok(PixelProvider::RGB0(w, h, buf))
-                }
+                // RGB0 has no strided variant, so de-pad in place before wrapping.
+                // Record the now-tight stride: capture() re-serves the same
+                // buffer when no new frame arrives before the deadline, and a
+                // second de-pad pass over compacted rows would corrupt them.
+                depad_rows_in_place(&mut self.frame_buffer, h, stride, tight_stride);
+                self.stride = tight_stride;
+                Ok(PixelProvider::RGB0(w, h, self.frame_buffer.as_slice()))
             }
             _ => Err(Box::new(PipeWireError(format!(
                 "Unsupported pixel format: {:?}",
@@ -1228,4 +1247,61 @@ pub fn get_capturables(capture_cursor: bool) -> Result<Vec<PipeWireCapturable>, 
         .iter()
         .map(|s| PipeWireCapturable::new(session.clone(), session.fd.clone(), *s))
         .collect())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A padded RGBx buffer (stride > width * 4) must have every row
+    /// compacted to `width * 4` bytes, in row order, with no data loss —
+    /// this is the exact defect from the mislabeled-RGB0 corruption bug:
+    /// consumers always read `RGB0` as if `linesize == width * 4`.
+    #[test]
+    fn depad_rows_in_place_compacts_padded_rgba_rows() {
+        let w = 3usize;
+        let h = 4usize;
+        let tight_stride = w * 4; // 12
+        let stride = 16usize; // e.g. 64-byte GPU row alignment for a narrow width
+
+        let mut buf = vec![0u8; stride * h];
+        for row in 0..h {
+            for b in 0..tight_stride {
+                buf[row * stride + b] = (row * tight_stride + b) as u8;
+            }
+            // Padding bytes: distinct sentinel value that must never survive.
+            for b in tight_stride..stride {
+                buf[row * stride + b] = 0xAA;
+            }
+        }
+
+        depad_rows_in_place(&mut buf, h, stride, tight_stride);
+
+        assert_eq!(buf.len(), h * tight_stride);
+        for row in 0..h {
+            for b in 0..tight_stride {
+                let expected = (row * tight_stride + b) as u8;
+                assert_eq!(
+                    buf[row * tight_stride + b],
+                    expected,
+                    "row {row} byte {b} landed at the wrong offset after de-padding"
+                );
+            }
+        }
+        // No stray padding byte should remain anywhere in the compacted buffer.
+        assert!(!buf.contains(&0xAA));
+    }
+
+    #[test]
+    fn depad_rows_in_place_is_noop_when_already_tight() {
+        let w = 4usize;
+        let h = 2usize;
+        let tight_stride = w * 4;
+        let original = vec![1u8, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
+        let mut buf = original.clone();
+
+        depad_rows_in_place(&mut buf, h, tight_stride, tight_stride);
+
+        assert_eq!(buf, original);
+    }
 }
