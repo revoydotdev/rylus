@@ -1,10 +1,9 @@
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc;
 use std::sync::mpsc::RecvTimeoutError;
 use std::sync::Arc;
 use std::thread::{spawn, JoinHandle};
 use std::time::{Duration, Instant};
-use tokio::sync::broadcast;
 use tracing::{error, info, trace, warn};
 
 use rylus_capture::{get_capturables, Capturable, Recorder};
@@ -15,19 +14,6 @@ use rylus_core::protocol::{
 };
 use rylus_encode::{EncoderOptions, VideoEncoder};
 use rylus_input::device::{InputDevice, InputDeviceType};
-
-#[allow(dead_code)]
-const BROADCAST_CAPACITY: usize = 32;
-
-#[allow(dead_code)]
-#[derive(Clone, Debug)]
-pub enum StreamEvent {
-    VideoFrame(Arc<Vec<u8>>),
-    NewVideo,
-    VideoInit { codec_string: String },
-    ConfigOk,
-    Error(String),
-}
 
 pub(crate) struct VideoConfig {
     capturable: Box<dyn Capturable>,
@@ -76,8 +62,6 @@ pub struct RylusClientConfig {
     pub encoder_options: EncoderOptions,
     #[cfg(target_os = "linux")]
     pub wayland_support: bool,
-    #[cfg(feature = "gui")]
-    pub no_gui: bool,
 }
 
 impl<S, R, FnUInput> RylusClientHandler<S, R, FnUInput> {
@@ -186,27 +170,13 @@ impl<S, R, FnUInput> RylusClientHandler<S, R, FnUInput> {
                             self.send_message(MessageOutbound::HeartbeatAck { server_ts_ms });
                         }
                         MessageInbound::ChooseCustomInputAreas => {
-                            #[cfg(feature = "gui")]
-                            {
-                                let (sender, receiver) = std::sync::mpsc::channel();
-                                rylus_gui::get_input_area(self.config.no_gui, sender);
-                                let mut sender = self.sender.clone();
-                                spawn(move || {
-                                    while let Ok(areas) = receiver.recv() {
-                                        send_message(
-                                            &mut sender,
-                                            MessageOutbound::CustomInputAreas(areas),
-                                        );
-                                    }
-                                });
-                            }
-                            #[cfg(not(feature = "gui"))]
-                            {
-                                warn!("Custom input areas require the 'gui' feature.");
-                                self.send_message(MessageOutbound::Error(
-                                    "Custom input areas not available without GUI.".to_string(),
-                                ));
-                            }
+                            // The FLTK-era native region picker was lost in the egui
+                            // migration; until a real picker ships, tell the client the
+                            // truth instead of returning a fake full-screen selection.
+                            self.send_message(MessageOutbound::ConfigError(
+                                "Custom input areas are not available in this version."
+                                    .to_string(),
+                            ));
                         }
                     }
                 }
@@ -272,12 +242,11 @@ impl<S, R, FnUInput> RylusClientHandler<S, R, FnUInput> {
             });
             return;
         }
-        let negotiated = PROTOCOL_VERSION.min(hello.protocol_version);
         tracing::info!(
             "Client hello: protocol v{}, server v{}, negotiated v{}",
             hello.protocol_version,
             PROTOCOL_VERSION,
-            negotiated,
+            PROTOCOL_VERSION.min(hello.protocol_version),
         );
         self.send_message(MessageOutbound::Hello(Hello {
             protocol_version: PROTOCOL_VERSION,
@@ -402,133 +371,20 @@ impl<S, R, FnUInput> RylusClientHandler<S, R, FnUInput> {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Multi-device broadcast: shared capture+encode pipeline
-// ---------------------------------------------------------------------------
-#[allow(dead_code)]
-pub struct StreamSession {
-    video_cmd_tx: Option<mpsc::Sender<VideoCommands>>,
-    event_tx: broadcast::Sender<StreamEvent>,
-    video_thread: Option<JoinHandle<()>>,
-    subscriber_count: AtomicUsize,
-}
-
-#[allow(dead_code)]
-impl StreamSession {
-    pub fn new(encoder_options: EncoderOptions) -> Self {
-        let (event_tx, _) = broadcast::channel(BROADCAST_CAPACITY);
-        let (video_cmd_tx, video_cmd_rx) = mpsc::channel::<VideoCommands>();
-
-        let event_tx_clone = event_tx.clone();
-        let video_thread = spawn(move || {
-            handle_video_broadcast(video_cmd_rx, event_tx_clone, encoder_options);
-        });
-
-        Self {
-            video_cmd_tx: Some(video_cmd_tx),
-            event_tx,
-            video_thread: Some(video_thread),
-            subscriber_count: AtomicUsize::new(0),
-        }
-    }
-
-    pub fn subscribe(&self) -> broadcast::Receiver<StreamEvent> {
-        self.subscriber_count.fetch_add(1, Ordering::Relaxed);
-        self.event_tx.subscribe()
-    }
-
-    pub fn send_command(&self, cmd: VideoCommands) {
-        if let Some(tx) = &self.video_cmd_tx {
-            if let Err(e) = tx.send(cmd) {
-                warn!("Failed to send command to video broadcast thread: {e}");
-            }
-        }
-    }
-
-    pub fn stop(&mut self) {
-        self.video_cmd_tx.take();
-        if let Some(handle) = self.video_thread.take() {
-            if let Err(e) = handle.join() {
-                warn!("Video broadcast thread panicked: {e:?}");
-            }
-        }
-    }
-
-    pub fn subscriber_count(&self) -> usize {
-        self.subscriber_count.load(Ordering::Relaxed)
-    }
-}
-
-#[allow(dead_code)]
-pub fn video_forwarder<S: RylusSender + Send + 'static>(
-    mut event_rx: broadcast::Receiver<StreamEvent>,
-    mut sender: S,
-) {
-    loop {
-        match event_rx.blocking_recv() {
-            Ok(event) => {
-                let result = match event {
-                    StreamEvent::VideoFrame(data) => sender.send_video(&data),
-                    StreamEvent::NewVideo => sender.send_message(MessageOutbound::NewVideo),
-                    StreamEvent::VideoInit { codec_string } => {
-                        sender.send_message(MessageOutbound::VideoInit { codec_string })
-                    }
-                    StreamEvent::ConfigOk => sender.send_message(MessageOutbound::ConfigOk),
-                    StreamEvent::Error(msg) => sender.send_message(MessageOutbound::Error(msg)),
-                };
-                if let Err(err) = result {
-                    trace!("Client disconnected: {err}");
-                    break;
-                }
-            }
-            Err(broadcast::error::RecvError::Lagged(n)) => {
-                warn!("Client lagged {n} frames — skipping");
-                continue;
-            }
-            Err(broadcast::error::RecvError::Closed) => {
-                break;
-            }
-        }
-    }
-}
-
-#[allow(dead_code)]
-fn handle_video_broadcast(
-    cmd_rx: mpsc::Receiver<VideoCommands>,
-    event_tx: broadcast::Sender<StreamEvent>,
-    encoder_options: EncoderOptions,
-) {
-    let _ = event_tx.send(StreamEvent::ConfigOk);
-
-    let event_tx_clone = event_tx.clone();
-    match VideoEncoder::new(
-        1,
-        1,
-        1,
-        1,
-        move |data| {
-            let _ = event_tx_clone.send(StreamEvent::VideoFrame(Arc::new(data.to_vec())));
-        },
-        encoder_options,
-    ) {
-        Ok(enc) => {
-            let _ = event_tx.send(StreamEvent::VideoInit {
-                codec_string: enc.codec_string().to_string(),
-            });
-            drop(enc);
-        }
-        Err(e) => {
-            let _ = event_tx.send(StreamEvent::Error(format!("Encoder creation failed: {e}")));
-        }
-    };
-
-    for _cmd in cmd_rx.iter() {}
-}
-
 /// Messages sent from the capture thread to the encode thread.
 enum EncodeCommand {
-    /// New pixel data to encode.
-    Frame(rylus_core::pixel::OwnedPixelData),
+    /// New pixel data to encode. Keyframe requests and quality changes ride
+    /// along with the frame instead of being separate commands: the channel
+    /// has capacity 1 and drops when the encoder is busy, and a dropped
+    /// standalone RequestKeyframe would strand the client on a frozen stream
+    /// exactly when it asked for recovery.
+    Frame {
+        owned: rylus_core::pixel::OwnedPixelData,
+        /// Force this frame to be an IDR keyframe.
+        keyframe: bool,
+        /// Apply a new QP before encoding, if set.
+        qp: Option<u32>,
+    },
     /// Encoder must be restarted with new dimensions.
     Restart {
         width_in: usize,
@@ -536,10 +392,6 @@ enum EncodeCommand {
         width_out: usize,
         height_out: usize,
     },
-    /// Adjust encoding quality.
-    SetQuality(u32),
-    /// Force the next encoded frame to be an IDR keyframe.
-    RequestKeyframe,
     /// Shut down the encode thread.
     Stop,
 }
@@ -551,6 +403,7 @@ enum EncodeCommand {
 fn encode_thread<S: RylusSender + Clone + Send + 'static>(
     encode_rx: mpsc::Receiver<EncodeCommand>,
     buffer_return_tx: mpsc::SyncSender<Vec<u8>>,
+    last_encode_nanos: Arc<AtomicU64>,
     mut sender: S,
     encoder_options: EncoderOptions,
 ) {
@@ -558,7 +411,11 @@ fn encode_thread<S: RylusSender + Clone + Send + 'static>(
 
     while let Ok(cmd) = encode_rx.recv() {
         match cmd {
-            EncodeCommand::Frame(owned) => {
+            EncodeCommand::Frame {
+                owned,
+                keyframe,
+                qp,
+            } => {
                 let enc = match video_encoder.as_mut() {
                     Some(e) => e,
                     None => {
@@ -568,7 +425,20 @@ fn encode_thread<S: RylusSender + Clone + Send + 'static>(
                         continue;
                     }
                 };
+                if let Some(qp) = qp {
+                    enc.set_quality(qp);
+                }
+                if keyframe {
+                    enc.request_keyframe();
+                }
+                let encode_start = Instant::now();
                 enc.encode(owned.as_provider());
+                // Publish the real encode duration so the capture thread's
+                // quality controller sees encoder saturation, not capture cost.
+                last_encode_nanos.store(
+                    encode_start.elapsed().as_nanos() as u64,
+                    Ordering::Relaxed,
+                );
                 let _ = buffer_return_tx.try_send(owned.into_buffer());
             }
             EncodeCommand::Restart {
@@ -606,16 +476,6 @@ fn encode_thread<S: RylusSender + Clone + Send + 'static>(
                         warn!("{}", e);
                         video_encoder = None;
                     }
-                }
-            }
-            EncodeCommand::SetQuality(qp) => {
-                if let Some(enc) = video_encoder.as_mut() {
-                    enc.set_quality(qp);
-                }
-            }
-            EncodeCommand::RequestKeyframe => {
-                if let Some(enc) = video_encoder.as_mut() {
-                    enc.request_keyframe();
                 }
             }
             EncodeCommand::Stop => return,
@@ -785,9 +645,20 @@ fn handle_video<S: RylusSender + Clone + Send + 'static>(
     // Vec capacity. Capacity 2 is plenty — at most one frame is in-flight in
     // `encode_tx` and one is being processed on the encode thread.
     let (buffer_return_tx, buffer_return_rx) = mpsc::sync_channel::<Vec<u8>>(2);
+    // Per-frame encode duration (nanoseconds) published by the encode thread.
+    let last_encode_nanos = Arc::new(AtomicU64::new(0));
     let encode_handle = {
         let sender = sender.clone();
-        spawn(move || encode_thread(encode_rx, buffer_return_tx, sender, encoder_options))
+        let last_encode_nanos = last_encode_nanos.clone();
+        spawn(move || {
+            encode_thread(
+                encode_rx,
+                buffer_return_tx,
+                last_encode_nanos,
+                sender,
+                encoder_options,
+            )
+        })
     };
 
     let mut recorder: Option<Box<dyn Recorder>> = None;
@@ -796,6 +667,12 @@ fn handle_video<S: RylusSender + Clone + Send + 'static>(
     let mut frame_duration = EFFECTIVE_INFINITY;
     let mut last_frame = Instant::now();
     let mut paused = false;
+
+    // Sticky until successfully attached to a frame — a client that asked for
+    // an IDR after a decode error must get one even if the encoder was busy
+    // at the moment the request arrived.
+    let mut pending_keyframe = false;
+    let mut pending_qp: Option<u32> = None;
 
     let mut quality = QualityController::new();
 
@@ -835,9 +712,8 @@ fn handle_video<S: RylusSender + Clone + Send + 'static>(
             Ok(VideoCommands::Start(config)) => {
                 #[allow(unused_assignments)]
                 {
-                    // gstpipewire can not handle setting a pipeline's state to Null after another
-                    // pipeline has been created and its state has been set to Play.
-                    // See: https://gitlab.freedesktop.org/pipewire/pipewire/-/issues/986
+                    // Drop the previous recorder before creating the next one so
+                    // its portal session / capture resources are released first.
                     recorder = None;
                 }
                 match config.capturable.recorder(config.capture_cursor) {
@@ -879,7 +755,7 @@ fn handle_video<S: RylusSender + Clone + Send + 'static>(
                 quality.set_buffer_health(buffer_secs);
             }
             Ok(VideoCommands::RequestKeyframe) => {
-                let _ = encode_tx.try_send(EncodeCommand::RequestKeyframe);
+                pending_keyframe = true;
             }
             Ok(VideoCommands::ClientRtt(rtt_ms)) => {
                 quality.set_rtt_ms(rtt_ms);
@@ -893,7 +769,6 @@ fn handle_video<S: RylusSender + Clone + Send + 'static>(
                         continue;
                     }
                 };
-                let capture_start = Instant::now();
                 let capture_result = rec.capture();
                 let pixel_data = match capture_result {
                     Ok(p) => {
@@ -960,18 +835,41 @@ fn handle_video<S: RylusSender + Clone + Send + 'static>(
                     .or_else(|| buffer_return_rx.try_recv().ok())
                     .unwrap_or_default();
                 let owned = pixel_data.to_owned_reusing(recycled);
-                let capture_elapsed = capture_start.elapsed().as_secs_f64();
 
                 // try_send: if encoder is busy, drop this frame
                 frames_total += 1;
-                match encode_tx.try_send(EncodeCommand::Frame(owned)) {
+                match encode_tx.try_send(EncodeCommand::Frame {
+                    owned,
+                    keyframe: pending_keyframe,
+                    qp: pending_qp.take(),
+                }) {
                     Ok(()) => {
-                        quality.record_encode_time(capture_elapsed);
+                        pending_keyframe = false;
+                        // Feed the encode thread's real per-frame duration into
+                        // the quality controller (0 until the first frame lands).
+                        let encode_secs =
+                            last_encode_nanos.load(Ordering::Relaxed) as f64 / 1e9;
+                        if encode_secs > 0.0 {
+                            quality.record_encode_time(encode_secs);
+                        }
                     }
-                    Err(mpsc::TrySendError::Full(EncodeCommand::Frame(owned))) => {
-                        // Rescue the Vec so the next frame can reuse it.
+                    Err(mpsc::TrySendError::Full(EncodeCommand::Frame {
+                        owned,
+                        keyframe,
+                        qp,
+                    })) => {
+                        // Rescue the Vec so the next frame can reuse it, and keep
+                        // the keyframe/qp requests pending for the next attempt.
                         spare_buffer = Some(owned.into_buffer());
+                        pending_keyframe = keyframe;
+                        if qp.is_some() {
+                            pending_qp = qp;
+                        }
                         frames_dropped += 1;
+                        // A busy encoder is the saturation signal: record a
+                        // full-budget sample so the controller backs off even
+                        // though no encode-duration reading exists for this frame.
+                        quality.record_encode_time(frame_duration.as_secs_f64());
                         trace!("Dropped frame (encoder busy)");
                     }
                     Err(mpsc::TrySendError::Full(_)) => {
@@ -996,9 +894,11 @@ fn handle_video<S: RylusSender + Clone + Send + 'static>(
                     last_stats_log = Instant::now();
                 }
 
-                // Unified quality decision: weighs buffer health + pipeline ratio
+                // Unified quality decision: weighs buffer health + pipeline ratio.
+                // The new QP rides along with the next frame that reaches the
+                // encoder, so it can't be lost to a busy channel.
                 if let Some(new_qp) = quality.decide(frame_duration.as_secs_f64()) {
-                    let _ = encode_tx.try_send(EncodeCommand::SetQuality(new_qp));
+                    pending_qp = Some(new_qp);
                     trace!("QP adjusted to {new_qp}");
                 }
             }
@@ -1149,126 +1049,4 @@ mod tests {
         assert!(result.is_none());
     }
 
-    // -----------------------------------------------------------------------
-    // StreamSession / broadcast tests
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn stream_session_new_creates_broadcast() {
-        let session = StreamSession::new(EncoderOptions::default());
-        assert_eq!(session.subscriber_count(), 0);
-    }
-
-    #[test]
-    fn stream_session_subscribe_increments_count() {
-        let session = StreamSession::new(EncoderOptions::default());
-        let _rx1 = session.subscribe();
-        let _rx2 = session.subscribe();
-        assert_eq!(session.subscriber_count(), 2);
-    }
-
-    #[tokio::test]
-    async fn stream_session_video_frame_broadcast() {
-        let session = StreamSession::new(EncoderOptions::default());
-        let mut rx1 = session.subscribe();
-        let mut rx2 = session.subscribe();
-
-        let data = Arc::new(vec![1u8, 2, 3, 4]);
-        let _ = session.event_tx.send(StreamEvent::VideoFrame(data.clone()));
-
-        let ev1 = rx1.recv().await.unwrap();
-        let ev2 = rx2.recv().await.unwrap();
-
-        match (ev1, ev2) {
-            (StreamEvent::VideoFrame(d1), StreamEvent::VideoFrame(d2)) => {
-                assert!(Arc::ptr_eq(&data, &d1));
-                assert!(Arc::ptr_eq(&data, &d2));
-            }
-            _ => panic!("Expected VideoFrame events"),
-        }
-    }
-
-    #[tokio::test]
-    async fn stream_session_lagged_receiver_skips() {
-        let session = StreamSession::new(EncoderOptions::default());
-        let _rx1 = session.subscribe();
-        let _rx2 = session.subscribe();
-
-        let (tx, mut rx) = broadcast::channel(1);
-        tx.send(StreamEvent::ConfigOk).unwrap();
-        tx.send(StreamEvent::NewVideo).unwrap();
-        match rx.recv().await {
-            Err(broadcast::error::RecvError::Lagged(n)) => assert_eq!(n, 1),
-            other => panic!("Expected Lagged error, got: {other:?}"),
-        }
-    }
-
-    #[test]
-    fn stream_event_clone_shared() {
-        let data = Arc::new(vec![42u8, 43, 44]);
-        let event = StreamEvent::VideoFrame(data.clone());
-        if let StreamEvent::VideoFrame(d2) = event {
-            assert!(
-                Arc::ptr_eq(&data, &d2),
-                "VideoFrame should share the Arc, not clone"
-            );
-        } else {
-            panic!("Expected VideoFrame");
-        }
-    }
-
-    // -----------------------------------------------------------------------
-    // video_forwarder tests
-    // -----------------------------------------------------------------------
-
-    struct MockSender {
-        messages: std::sync::Mutex<Vec<MessageOutbound>>,
-        videos: std::sync::Mutex<Vec<Vec<u8>>>,
-    }
-
-    impl MockSender {
-        fn new() -> Self {
-            Self {
-                messages: std::sync::Mutex::new(Vec::new()),
-                videos: std::sync::Mutex::new(Vec::new()),
-            }
-        }
-    }
-
-    impl RylusSender for MockSender {
-        type Error = std::convert::Infallible;
-
-        fn send_message(&mut self, message: MessageOutbound) -> Result<(), Self::Error> {
-            self.messages.lock().unwrap().push(message);
-            Ok(())
-        }
-
-        fn send_video(&mut self, bytes: &[u8]) -> Result<(), Self::Error> {
-            self.videos.lock().unwrap().push(bytes.to_vec());
-            Ok(())
-        }
-    }
-
-    #[test]
-    fn video_forwarder_sends_frames() {
-        let (tx, rx) = broadcast::channel(8);
-        let sender = MockSender::new();
-
-        tx.send(StreamEvent::VideoFrame(Arc::new(vec![1, 2, 3])))
-            .unwrap();
-        tx.send(StreamEvent::ConfigOk).unwrap();
-        tx.send(StreamEvent::NewVideo).unwrap();
-        tx.send(StreamEvent::VideoInit {
-            codec_string: "vp8".to_string(),
-        })
-        .unwrap();
-        tx.send(StreamEvent::Error("test error".to_string()))
-            .unwrap();
-        drop(tx);
-
-        video_forwarder(rx, sender);
-
-        // The MockSender is moved into the thread, so we can't check its contents here.
-        // The test verifies the function doesn't panic and exits cleanly.
-    }
 }

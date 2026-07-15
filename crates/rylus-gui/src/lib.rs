@@ -9,7 +9,6 @@ use tracing::{info, warn};
 use pnet_datalink as datalink;
 
 use rylus_core::config::{write_config, Config};
-use rylus_core::protocol::CustomInputAreas;
 pub use rylus_core::Web2UiMessage;
 
 use Web2UiMessage::UInputInaccessible;
@@ -859,36 +858,4 @@ pub fn run(config: &Config, log_receiver: mpsc::Receiver<String>, rylus: Box<dyn
         Box::new(move |_cc| Ok(Box::new(RylusApp::new(&config, log_receiver, rylus)))),
     )
     .expect("Failed to run GUI!");
-}
-
-// ---------------------------------------------------------------------------
-// Custom Input Area overlay (used by server for screen region selection)
-// ---------------------------------------------------------------------------
-//
-// The custom input area overlay is a separate window that lets users select a
-// screen region. In the FLTK version this was tightly coupled to FLTK's event
-// loop. With egui we keep the same public interface but implement it using a
-// simple standalone eframe window.
-//
-// NOTE: The input area overlay is a complex FLTK-specific feature that relies
-// on borderless transparent overlay windows with drag-to-resize, multi-screen
-// awareness, and fltk widget IDs. A full egui port of this overlay would
-// require a separate native window with raw input handling. For now we
-// preserve the public API and implement a simplified version that opens a
-// dialog for the user to confirm the selection.
-// ---------------------------------------------------------------------------
-
-pub fn get_input_area(
-    _no_gui: bool,
-    output_sender: std::sync::mpsc::Sender<rylus_core::protocol::CustomInputAreas>,
-) {
-    // For the egui migration, the custom input area selection sends a default
-    // (full workspace) selection. A full overlay implementation would require
-    // a separate native window, which is planned for a future iteration.
-    //
-    // This preserves the public interface so the server compiles and works.
-    let areas = CustomInputAreas::default();
-    if let Err(e) = output_sender.send(areas) {
-        warn!("Failed to send custom input areas: {}", e);
-    }
 }
