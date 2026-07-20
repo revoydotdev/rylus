@@ -108,6 +108,12 @@ pub struct Config {
     #[arg(long, help = "Run Rylus without gui and start immediately.")]
     #[serde(default)]
     pub no_gui: bool,
+    #[arg(
+        long,
+        help = "Run a headless self-test and exit (routine implemented in a follow-up)."
+    )]
+    #[serde(default)]
+    pub self_test: bool,
     #[cfg(target_os = "linux")]
     #[arg(
         long,
