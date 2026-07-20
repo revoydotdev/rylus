@@ -140,8 +140,10 @@ fn collision_suffix() -> String {
         .map(|d| d.subsec_nanos())
         .unwrap_or(0);
     let mixed = pid.wrapping_mul(0x9E37_79B1).wrapping_add(jitter) | 1;
-    CACHED.store(mixed, Ordering::Relaxed);
-    format_suffix(mixed)
+    match CACHED.compare_exchange(0, mixed, Ordering::Relaxed, Ordering::Relaxed) {
+        Ok(_) => format_suffix(mixed),
+        Err(winner) => format_suffix(winner),
+    }
 }
 
 fn format_suffix(mixed: u32) -> String {
