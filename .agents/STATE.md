@@ -7,6 +7,31 @@
 - MILESTONE_PHASE: NORMAL
 - CURRENT_MILESTONE: M1
 
+## 2026-07-20 tick — RECOVER (2nd consecutive tick, unchanged): salvage still blocking
+
+`preflight.sh` → `RECOVER:concern-worktrees;concern-branches` again, identical
+to the prior tick — same 3 `concern/{self-test-routine,fmt-fix,bench-ci-gate}`
+worktrees/branches, still orphaned-unlanded/unmerged, still SALVAGE-first.
+Nothing new for automated recovery to act on. Re-verified rather than assumed:
+`ledger.py check --rerun` → PASS (7/7 done todos, real cargo runs incl. the
+encode bench and protocol_version test); `master` still an ancestor of
+`integration` (no reconciliation needed); `integration` is even with
+`origin/integration` (0 ahead/0 behind — nothing to push). No stale lock to
+clear (this tick's `RUN.lock` was freshly created at start, prior one had
+already been cleared and removed last tick).
+
+Per HARD INVARIANTS and this tick's explicit RECOVER contract, still did not
+touch the 3 worktrees — deliberate salvage (diff each, decide keep/discard/
+re-verify) is out of scope for the automated RECOVER path and risks
+discarding unverified worker output without review. **This is now 2 ticks in
+a row with zero NORMAL-phase progress on M1** (12/15 todos still remaining)
+because these orphans keep tripping `preflight.sh`. Flagging with higher
+urgency: an operator (or a tick explicitly scoped to salvage review) needs to
+open each worktree, check whether the worker's diff is sound, and either land
+it via a fresh `concern/*` branch + `integrate.sh` or discard it, then
+`git worktree remove` + `git branch -d` to clear the residue. Until that
+happens, every subsequent tick will just repeat this same no-op RECOVER.
+
 ## 2026-07-20 tick — RECOVER: killed-tick residue, salvage needed
 
 `preflight.sh` → `RECOVER:concern-worktrees;concern-branches`. `worktree-check.sh`
