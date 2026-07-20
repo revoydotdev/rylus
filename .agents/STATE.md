@@ -36,3 +36,4 @@ should add them to `.gitignore`; if they're stale, remove manually.
 
 ## enrollment
 Scaffolded into the swarm by `enroll.py` (ADR-0028). Awaiting its first tick.
+- 2026-07-20T22:35:30Z — integrated `concern/self-test-flag` into `integration` at `024080e`
