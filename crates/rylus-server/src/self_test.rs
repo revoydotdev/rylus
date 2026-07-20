@@ -234,3 +234,13 @@ fn ws_upgrade_probe(addr: SocketAddr, timeout: Duration) -> Result<(), String> {
         ))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn self_test_run_passes_and_tears_down_cleanly() {
+        assert!(run(), "self-test routine should complete all stages and return true");
+    }
+}
