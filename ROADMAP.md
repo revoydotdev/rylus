@@ -66,6 +66,17 @@ benchmark baseline with a CI regression gate (AX-1, AX-3, AX-7).
 - **M1G4** — Headless self-test exits 0. → *Check:* `cargo run -q -p rylus-server -- --self-test`
 - **M1G5** — Protocol spec exists and covers v3 messages. → *Check:* `test -f docs/PROTOCOL.md && grep -q 'HeartbeatAck' docs/PROTOCOL.md`
 
+### M1.P9.S1 — Workspace health
+
+- **`M1.P9.S1.T1`** — Close M1G1: the full workspace builds and the test suite passes clean. → *Artifact:* `cargo test --workspace --locked` · *Concern:* testing
+- **`M1.P9.S1.T2`** — Close M1G2: zero clippy warnings across all targets. → *Artifact:* `cargo clippy --all-targets -- -D warnings` · *Concern:* reliability
+- **`M1.P9.S1.T3`** — Close M1G3: `cargo fmt` reports no diffs. → *Artifact:* `cargo fmt -- --check` · *Concern:* ci
+
+### M1.P9.S2 — Release & docs closure
+
+- **`M1.P9.S2.T1`** — Close M1G4: the headless `--self-test` path exits 0. → *Artifact:* `cargo run -q -p rylus-server -- --self-test` · *Concern:* release
+- **`M1.P9.S2.T2`** — Close M1G5: `docs/PROTOCOL.md` exists and documents the v3 message set. → *Artifact:* `test -f docs/PROTOCOL.md && grep -q 'HeartbeatAck' docs/PROTOCOL.md` · *Concern:* docs
+
 ---
 
 # M2 — Security review & latency verification
