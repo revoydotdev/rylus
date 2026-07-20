@@ -107,3 +107,4 @@ Scaffolded into the swarm by `enroll.py` (ADR-0028). Awaiting its first tick.
 - 2026-07-20T22:35:30Z — integrated `concern/self-test-flag` into `integration` at `024080e`
 - 2026-07-20T22:37:52Z — integrated `concern/protocol-doc` into `integration` at `f498d1c`
 - 2026-07-20T22:38:38Z — integrated `concern/encode-bench` into `integration` at `2738d4f`
+- 2026-07-20T23:14:30Z — integrated `concern/fmt-fix` into `integration` at `764d89e`
