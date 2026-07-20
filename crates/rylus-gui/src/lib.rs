@@ -422,20 +422,20 @@ fn apply_rylus_theme(ctx: &egui::Context) {
         visuals.faint_bg_color = DARK_SURFACE;
         visuals.override_text_color = Some(DARK_TEXT);
         visuals.widgets.noninteractive.bg_fill = DARK_SURFACE;
-        visuals.widgets.noninteractive.fg_stroke = egui::Stroke::new(1.0, DARK_TEXT_SECONDARY);
-        visuals.widgets.noninteractive.bg_stroke = egui::Stroke::new(1.0, DARK_BORDER);
+        visuals.widgets.noninteractive.fg_stroke = egui::Stroke::new(1.0_f32, DARK_TEXT_SECONDARY);
+        visuals.widgets.noninteractive.bg_stroke = egui::Stroke::new(1.0_f32, DARK_BORDER);
         visuals.widgets.inactive.bg_fill = DARK_SURFACE_RAISED;
-        visuals.widgets.inactive.fg_stroke = egui::Stroke::new(1.0, DARK_TEXT);
-        visuals.widgets.inactive.bg_stroke = egui::Stroke::new(1.0, DARK_BORDER);
+        visuals.widgets.inactive.fg_stroke = egui::Stroke::new(1.0_f32, DARK_TEXT);
+        visuals.widgets.inactive.bg_stroke = egui::Stroke::new(1.0_f32, DARK_BORDER);
         visuals.widgets.hovered.bg_fill = DARK_SURFACE_RAISED;
-        visuals.widgets.hovered.fg_stroke = egui::Stroke::new(1.0, ACCENT_HOVER);
-        visuals.widgets.hovered.bg_stroke = egui::Stroke::new(1.0, ACCENT);
+        visuals.widgets.hovered.fg_stroke = egui::Stroke::new(1.0_f32, ACCENT_HOVER);
+        visuals.widgets.hovered.bg_stroke = egui::Stroke::new(1.0_f32, ACCENT);
         visuals.widgets.active.bg_fill = ACCENT;
-        visuals.widgets.active.fg_stroke = egui::Stroke::new(1.0, egui::Color32::WHITE);
-        visuals.widgets.active.bg_stroke = egui::Stroke::new(1.0, ACCENT);
+        visuals.widgets.active.fg_stroke = egui::Stroke::new(1.0_f32, egui::Color32::WHITE);
+        visuals.widgets.active.bg_stroke = egui::Stroke::new(1.0_f32, ACCENT);
         visuals.selection.bg_fill = ACCENT.linear_multiply(0.3);
-        visuals.selection.stroke = egui::Stroke::new(1.0, ACCENT);
-        visuals.window_stroke = egui::Stroke::new(1.0, DARK_BORDER);
+        visuals.selection.stroke = egui::Stroke::new(1.0_f32, ACCENT);
+        visuals.window_stroke = egui::Stroke::new(1.0_f32, DARK_BORDER);
     } else {
         visuals.panel_fill = LIGHT_BG;
         visuals.window_fill = LIGHT_SURFACE;
@@ -443,20 +443,20 @@ fn apply_rylus_theme(ctx: &egui::Context) {
         visuals.faint_bg_color = LIGHT_SURFACE;
         visuals.override_text_color = Some(LIGHT_TEXT);
         visuals.widgets.noninteractive.bg_fill = LIGHT_SURFACE;
-        visuals.widgets.noninteractive.fg_stroke = egui::Stroke::new(1.0, LIGHT_TEXT_SECONDARY);
-        visuals.widgets.noninteractive.bg_stroke = egui::Stroke::new(1.0, LIGHT_BORDER);
+        visuals.widgets.noninteractive.fg_stroke = egui::Stroke::new(1.0_f32, LIGHT_TEXT_SECONDARY);
+        visuals.widgets.noninteractive.bg_stroke = egui::Stroke::new(1.0_f32, LIGHT_BORDER);
         visuals.widgets.inactive.bg_fill = LIGHT_SURFACE;
-        visuals.widgets.inactive.fg_stroke = egui::Stroke::new(1.0, LIGHT_TEXT);
-        visuals.widgets.inactive.bg_stroke = egui::Stroke::new(1.0, LIGHT_BORDER);
+        visuals.widgets.inactive.fg_stroke = egui::Stroke::new(1.0_f32, LIGHT_TEXT);
+        visuals.widgets.inactive.bg_stroke = egui::Stroke::new(1.0_f32, LIGHT_BORDER);
         visuals.widgets.hovered.bg_fill = LIGHT_SURFACE;
-        visuals.widgets.hovered.fg_stroke = egui::Stroke::new(1.0, ACCENT);
-        visuals.widgets.hovered.bg_stroke = egui::Stroke::new(1.0, ACCENT);
+        visuals.widgets.hovered.fg_stroke = egui::Stroke::new(1.0_f32, ACCENT);
+        visuals.widgets.hovered.bg_stroke = egui::Stroke::new(1.0_f32, ACCENT);
         visuals.widgets.active.bg_fill = ACCENT;
-        visuals.widgets.active.fg_stroke = egui::Stroke::new(1.0, egui::Color32::WHITE);
-        visuals.widgets.active.bg_stroke = egui::Stroke::new(1.0, ACCENT);
+        visuals.widgets.active.fg_stroke = egui::Stroke::new(1.0_f32, egui::Color32::WHITE);
+        visuals.widgets.active.bg_stroke = egui::Stroke::new(1.0_f32, ACCENT);
         visuals.selection.bg_fill = ACCENT.linear_multiply(0.15);
-        visuals.selection.stroke = egui::Stroke::new(1.0, ACCENT);
-        visuals.window_stroke = egui::Stroke::new(1.0, LIGHT_BORDER);
+        visuals.selection.stroke = egui::Stroke::new(1.0_f32, ACCENT);
+        visuals.window_stroke = egui::Stroke::new(1.0_f32, LIGHT_BORDER);
     }
 
     // Shared: border radius from DESIGN.md (sm: 4px)
