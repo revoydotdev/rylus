@@ -4,8 +4,65 @@
 > Status keys: CLAIMED · IN_PROGRESS · DONE · BLOCKED · GATE-FAILED
 
 <!-- CONTROL: machine-read; supervisor updates these two lines -->
-- MILESTONE_PHASE: REMEDIATION
+- MILESTONE_PHASE: AUDIT
 - CURRENT_MILESTONE: M1
+
+## 2026-07-20 tick — REMEDIATION: both AUDIT findings fixed, back to AUDIT
+
+Fixed exactly the two blocking issues from the prior AUDIT:FAIL tick, nothing
+else. Dispatched 2 disjoint sonnet workers in their own worktrees
+(`scripts/worktree.sh create`), independently re-verified each on my own side
+before integrating (never trusted the self-reports alone), then integrated
+both onto `integration` via `scripts/integrate.sh` with real gate commands.
+
+**1. mdns race (`collision_suffix()`, `crates/rylus-server/src/mdns.rs`).**
+`concern/fix-mdns-race` → `40203ca`, integrated `3f5c073`. Replaced the
+non-atomic load-then-`store` on the cached `AtomicU32` with a single
+`compare_exchange(0, mixed, Relaxed, Relaxed)`, so the cache populates
+exactly once and every caller (winner or loser) converges on the same
+value. Diff is 4 lines, only that one function touched. Independently
+re-ran `cargo test -p rylus-server mdns:: --locked -- --test-threads=8` 10x
+back-to-back on my own side twice — once in the worker's worktree pre-merge,
+once again on the integrated `integration` tip post-merge — **20/20 clean,
+zero flakes**. Not a lucky roll: this closes the actual data race, not just
+reduces its probability. `M1.P9.S1.T1`'s ledger entry (artifact `cargo test
+--workspace --locked`) is left as-is per the remediation brief (command
+unchanged, now genuinely stable) — re-ran the full workspace suite 3x more
+this tick, all exit 0, zero failures (67/67 in `rylus-server`'s own unit
+binary each time, no `FAILED` lines anywhere).
+
+**2. `M1.P1.S1.T3` vacuous artifact (`crates/rylus-server/src/self_test.rs`).**
+`concern/fix-selftest-test` → `4989af3`, integrated `170c509`. Added a
+`#[cfg(test)] mod tests` block at the end of the file (the crate has no
+`[lib]` target, so a `tests/*.rs` integration file can't link against
+`self_test::run` — matched the existing bin-only architecture rather than
+inventing one) with one test, `self_test_run_passes_and_tears_down_cleanly`,
+that calls `run()` in-process and asserts `true`. Independently re-ran
+`cargo test -p rylus-server self_test --locked -- --nocapture` myself both
+pre- and post-merge: `test result: ok. 1 passed; 0 failed` both times (was
+"running 0 tests" before). Retracted the prior false-positive ledger record
+and re-recorded for real: `ledger.py kill --todo M1.P1.S1.T3 --reason
+"artifact was vacuous — 0 tests matched, no test existed"` then `ledger.py
+done --todo M1.P1.S1.T3 --cmd 'cargo test -p rylus-server self_test
+--locked' --commit 170c509 --concern self-test-integration-test --run` (the
+`--run` flag executed the command for real as part of recording).
+
+**One self-caused regression, caught and fixed before declaring done:** the
+new test assertion line in `self_test.rs` exceeded rustfmt's width and broke
+M1G3 (`cargo fmt -- --check`, `M1.P9.S1.T3`) — `ledger.py check --rerun`
+caught it immediately after integrating (`FAIL: M1.P9.S1.T3 RERUN 'cargo fmt
+-- --check' => 1`). Ran `cargo fmt -p rylus-server` and committed the
+4-line reformat separately (`b94eeaa`, `chore: cargo fmt self_test.rs`).
+Re-ran `cargo fmt -- --check` after: clean. This is why "green once" isn't
+enough — re-verify after every change, including your own follow-ups.
+
+**Final re-check before flipping the control block:** `ledger.py check
+--rerun` → PASS (15/15 done todos, structural+rerun). `cargo fmt -- --check`
+→ clean. `cargo test --workspace --locked` run 3 additional times → exit 0
+all 3, zero `FAILED` lines. Both audit findings are closed with real
+evidence, not self-report. Flipping `MILESTONE_PHASE` to `AUDIT`,
+`CURRENT_MILESTONE` stays `M1` — this tick does not audit its own work, a
+future tick re-verifies and decides master fast-forward.
 
 ## 2026-07-20 tick — AUDIT: FAIL (2 blocking issues, master NOT fast-forwarded)
 
