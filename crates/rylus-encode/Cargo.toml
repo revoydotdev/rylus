@@ -16,3 +16,10 @@ serde_json = { workspace = true }
 version = "8"
 default-features = false
 features = ["avcodec", "avformat", "avfilter", "swscale", "swresample"]
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[[bench]]
+name = "encode"
+harness = false
