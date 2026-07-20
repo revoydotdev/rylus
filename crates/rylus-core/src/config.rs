@@ -110,7 +110,7 @@ pub struct Config {
     pub no_gui: bool,
     #[arg(
         long,
-        help = "Run a headless self-test and exit (routine implemented in a follow-up)."
+        help = "Run a headless self-test (capture, encode, bind, WS accept) and exit."
     )]
     #[serde(default)]
     pub self_test: bool,

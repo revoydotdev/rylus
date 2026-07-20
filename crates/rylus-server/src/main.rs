@@ -12,6 +12,7 @@ use rylus_core::Web2UiMessage;
 mod log;
 mod mdns;
 mod rylus;
+mod self_test;
 mod session;
 mod tls;
 mod web;
@@ -60,6 +61,11 @@ fn main() {
     if conf.print_lib_js {
         print!("{}", web::LIB_JS);
         return;
+    }
+
+    if conf.self_test {
+        let passed = self_test::run();
+        std::process::exit(if passed { 0 } else { 1 });
     }
 
     #[cfg(target_os = "linux")]
