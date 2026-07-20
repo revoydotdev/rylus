@@ -134,3 +134,4 @@ Scaffolded into the swarm by `enroll.py` (ADR-0028). Awaiting its first tick.
 - 2026-07-20T23:14:32Z — integrated `concern/bench-ci-gate` into `integration` at `afb88c2`
 - 2026-07-20T23:14:40Z — integrated `concern/self-test-routine` into `integration` at `281b4df`
 - 2026-07-20T23:21:17Z — integrated `concern/ci-selftest-step` into `integration` at `8b198c5`
+- 2026-07-20T23:21:20Z — integrated `concern/gui-clippy-f32` into `integration` at `8dc5a49`
