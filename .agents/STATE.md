@@ -23,6 +23,8 @@ CLAIMED (3 disjoint concerns, feature todos, dispatched to sonnet workers):
 - CLAIMED `M1.P2.S1.T1` — concern `protocol-doc` — write `docs/PROTOCOL.md` from `crates/rylus-core/src/protocol.rs`
 - CLAIMED `M1.P3.S1.T1` — concern `encode-bench` — add criterion bench scaffold under `crates/rylus-encode/benches/`
 
+DONE — `M1.P1.S1.T1` — integrated `concern/self-test-flag` at `024080e` (ff-merge `950d7bf`) — verified `cargo run -q -p rylus-server -- --help | grep -q -- '--self-test'` exit 0.
+
 ## 2026-07-20 tick — preflight DIRTY, skipped
 `scripts/preflight.sh` → `DIRTY:2 files` (untracked `STATUS.md`, `.studio/` —
 pre-existing local artifacts from a prior manual `/studio` session, not
