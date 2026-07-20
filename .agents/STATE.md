@@ -4,8 +4,125 @@
 > Status keys: CLAIMED · IN_PROGRESS · DONE · BLOCKED · GATE-FAILED
 
 <!-- CONTROL: machine-read; supervisor updates these two lines -->
-- MILESTONE_PHASE: AUDIT
+- MILESTONE_PHASE: REMEDIATION
 - CURRENT_MILESTONE: M1
+
+## 2026-07-20 tick — AUDIT: FAIL (1 blocking issue, master NOT fast-forwarded)
+
+Independent re-verification of M1 against its 5 gates plus substance, on
+`integration` tip `c134d9c`. Not a rubber stamp of the prior REMEDIATION
+tick's self-report.
+
+**All 5 gates genuinely green, re-run for real, not trusted from the
+ledger:**
+- M1G1 `cargo test --workspace --locked`: full run PASS, all crates 0
+  failed. Separately ran `cargo test -p rylus-server mdns:: --locked --
+  --test-threads=8` **10x back-to-back**: 15 passed / 0 failed every time —
+  the compare_exchange fix from the prior remediation tick
+  (`crates/rylus-server/src/mdns.rs:128-147`) is confirmed solid, no flake
+  reproduced. Read the fix: single `CACHED.compare_exchange(0, mixed,
+  Relaxed, Relaxed)` — winner and every loser converge on the same `mixed`
+  value via the `Err(winner) => format_suffix(winner)` arm. Correctly
+  reasoned, no remaining race.
+- M1G2 `cargo clippy --all-targets -- -D warnings` → exit 0, no warnings.
+- M1G3 `cargo fmt -- --check` → exit 0, no diff.
+- M1G4 `cargo run -q -p rylus-server -- --self-test` → exit 0. Read
+  `crates/rylus-server/src/self_test.rs` in full: real `testsrc` capture,
+  real `VideoEncoder`/libx264 GOP encode (asserts `emitted != 0`), real
+  `Rylus::start` bind on an ephemeral loopback port, real hand-rolled HTTP
+  Upgrade request over a raw `TcpStream` asserting the response status line
+  contains `101`. Confirmed `main.rs:66-68` actually wires `conf.self_test`
+  to call `self_test::run()` and `process::exit` on its result — not a
+  disconnected flag. The M1.P1.S1.T3 in-process test
+  (`self_test_run_passes_and_tears_down_cleanly`) genuinely calls `run()`
+  and asserts `true`; confirmed non-vacuous (was the prior tick's fix).
+- M1G5 `test -f docs/PROTOCOL.md && grep -q HeartbeatAck ...` → PASS.
+  Diffed `docs/PROTOCOL.md` against every variant in
+  `crates/rylus-core/src/protocol.rs` by hand: all `MessageInbound` and
+  `MessageOutbound` variants are documented with accurate JSON shapes,
+  including the `batched_pointer_events` serde-rename exception, the
+  `HelloNack` version-guard, `ClientRtt`, `RequestKeyframe`, and the stated
+  `PROTOCOL_VERSION = 3` / `MIN_CLIENT_PROTOCOL_VERSION = 2` constants
+  (verified these two numbers against `protocol.rs:7,14` — exact match). No
+  drift found. Consistent with AX-3/ADR-0003 (LAN-only, single-WebSocket
+  transport) — no alternate transport implied anywhere in the doc.
+- `python3 scripts/ledger.py check --rerun` → PASS (15/15 done todos,
+  structural+rerun).
+
+**Encode bench harness — real, not cosmetic.**
+`crates/rylus-encode/benches/encode.rs` drives the actual
+`VideoEncoder::encode()` over a real libx264 software path with a fixed
+synthetic BGR0 frame (not a stub). `BASELINE.md` records a real measured
+run (667.94µs mean, host CPU/FFmpeg version stated). Read
+`scripts/bench-gate.sh` in full and ran it directly: it parses the baseline
+mean out of `BASELINE.md` (not hardcoded), runs the bench for real, parses
+the measured mean, computes `(measured-baseline)/baseline*100`, and exits
+non-zero if that exceeds `THRESHOLD_PCT` (15, overridable via env). This
+run: measured 680.52µs, delta +1.88%, PASS — genuinely would fail on a real
+regression, not a rubber-stamp. `.github/workflows/build.yml`'s `quality`
+job wires both `Self-test` (line 37-38) and `Encode benchmark regression
+gate` (`./scripts/bench-gate.sh`, line 39-40) as real steps ahead of every
+`needs: quality` build job — a non-zero exit from either genuinely fails
+CI.
+
+**One blocking finding: `M1.P2.S1.T3`'s test does not actually check
+doc/code alignment — it's a hardcoded tautology, not a drift guard.**
+
+The todo's own text: "Add a test asserting the documented protocol version
+matches the constant in code, so the doc cannot silently drift." The
+artifact check is `cargo test -p rylus-core protocol_version`, which
+matches exactly one test: `protocol_version_is_three`
+(`crates/rylus-core/src/protocol.rs:967-970`):
+
+```rust
+#[test]
+fn protocol_version_is_three() {
+    assert_eq!(PROTOCOL_VERSION, 3);
+}
+```
+
+This asserts the `PROTOCOL_VERSION` constant equals a **hardcoded literal
+`3`** — it never reads, parses, or references `docs/PROTOCOL.md` in any
+way. Confirmed with `grep -rn "PROTOCOL.md\|include_str" crates/`: zero
+matches anywhere in the workspace. So if a future change bumps
+`PROTOCOL_VERSION` to `4` in `protocol.rs` *and* updates this test's
+literal to `4` (which a developer would naturally do together, since
+they're two lines apart in the same file) but forgets to update
+`docs/PROTOCOL.md`, this test keeps passing while the doc silently goes
+stale — exactly the failure mode the todo was written to prevent. The test
+provides zero actual protection against doc/code drift; it only protects
+against `PROTOCOL_VERSION` drifting from an arbitrary number restated a few
+lines below it in the same file. This is a "safeguard that is documented
+but not wired" per this project's own AX-6 (`VISION.md:61`: "A safeguard
+that is documented but not wired is treated as a defect") and the same
+class of vacuous-artifact problem the immediately prior remediation tick
+already fixed once for `M1.P1.S1.T3` (self_test.rs) — this is the same bug
+pattern recurring in a sibling todo that wasn't in scope for that fix.
+
+Ledger record for `M1.P2.S1.T3` (`{"verified_by":{"cmd":"cargo test -p
+rylus-core protocol_version","exit":0}}`, self-healed, no commit) reflects
+a real passing test, but the test doesn't do what the todo — or the
+milestone's "wire protocol is documented ... and matches
+`rylus-core::protocol`" 1.0.0 criterion (`VISION.md:85-87`) — actually
+requires.
+
+**Verdict: FAIL.** Did not touch `master`/`origin`. `MILESTONE_PHASE` set
+to `REMEDIATION`, `CURRENT_MILESTONE` stays `M1`. Remediation scope for the
+next tick, narrowly: rewrite (or add alongside) the `protocol_version_is_three`
+test in `crates/rylus-core/src/protocol.rs` so it actually reads
+`docs/PROTOCOL.md` (e.g. `include_str!("../../../docs/PROTOCOL.md")` from
+the crate, or a workspace-relative path via `CARGO_MANIFEST_DIR`) and
+asserts the doc's stated `PROTOCOL_VERSION` / `MIN_CLIENT_PROTOCOL_VERSION`
+values (e.g. via a regex/substring check against the doc's `pub const
+PROTOCOL_VERSION: u32 = 3;` code block and the prose `MIN_CLIENT_PROTOCOL_VERSION
+= 2` in §1.2) actually match the real constants in code, not a
+second hardcoded literal. Re-verify by bumping `PROTOCOL_VERSION` locally
+in a scratch edit (not committed) and confirming the new test fails when
+the doc isn't updated, then revert the scratch edit — that's the real
+proof it's wired, not just green once. Everything else audited this tick
+(all 5 gates, self-test substance, mdns fix stability, bench harness
+reality, CI wiring) is confirmed solid and does not need re-auditing next
+tick unless touched.
 
 ## 2026-07-20 tick — REMEDIATION: both AUDIT findings fixed, back to AUDIT
 
