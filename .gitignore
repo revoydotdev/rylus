@@ -12,3 +12,5 @@
 *.js.map
 *.tar.gz
 .gstack/
+/STATUS.md
+/.studio/
