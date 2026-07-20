@@ -15,3 +15,4 @@
 {"commit":"","concern":"","milestone":"M1","todo":"M1.P9.S1.T1","ts":"2026-07-20T19:22:29-0400","type":"done","verified_by":{"cmd":"cargo test --workspace --locked","exit":0}}
 {"milestone":"M1","reason":"artifact was vacuous \u2014 0 tests matched, no test existed","todo":"M1.P1.S1.T3","ts":"2026-07-20T19:37:56-0400","type":"kill"}
 {"commit":"170c509","concern":"self-test-integration-test","milestone":"M1","todo":"M1.P1.S1.T3","ts":"2026-07-20T19:37:59-0400","type":"done","verified_by":{"cmd":"cargo test -p rylus-server self_test --locked","exit":0}}
+{"commit":"38054b0","concern":"protocol-doc-drift-test","milestone":"M1","todo":"M1.P2.S1.T3","ts":"2026-07-20T19:51:06-0400","type":"done","verified_by":{"cmd":"cargo test -p rylus-core protocol_version --locked","exit":0}}

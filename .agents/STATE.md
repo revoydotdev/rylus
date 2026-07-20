@@ -4,8 +4,41 @@
 > Status keys: CLAIMED · IN_PROGRESS · DONE · BLOCKED · GATE-FAILED
 
 <!-- CONTROL: machine-read; supervisor updates these two lines -->
-- MILESTONE_PHASE: REMEDIATION
+- MILESTONE_PHASE: AUDIT
 - CURRENT_MILESTONE: M1
+
+## 2026-07-20 tick — REMEDIATION: fixed vacuous protocol-doc-drift test (M1.P2.S1.T3)
+
+Narrow fix for the prior tick's sole AUDIT:FAIL finding. Replaced
+`protocol_version_is_three` (`crates/rylus-core/src/protocol.rs`) — which
+only compared `PROTOCOL_VERSION` to a second hardcoded literal `3` in the
+same file and never touched `docs/PROTOCOL.md` — with
+`protocol_version_matches_docs`, which reads `docs/PROTOCOL.md` at compile
+time via `include_str!`, parses the `pub const PROTOCOL_VERSION` /
+`pub const MIN_CLIENT_PROTOCOL_VERSION` declarations the doc quotes
+verbatim from this file, and asserts both against the real constants.
+
+Proved the guard actually fires before committing: scratch-bumped
+`PROTOCOL_VERSION` to `4` without touching the doc, confirmed
+`protocol_version_matches_docs` FAILED with a clear drift message, then
+reverted the scratch edit (`git checkout -- crates/rylus-core/src/protocol.rs`)
+before writing the real fix.
+
+Verification re-run for real, not trusted: `cargo test -p rylus-core
+protocol_version --locked` (1 passed), `cargo fmt -- --check` (exit 0, no
+diff), `cargo clippy --all-targets -- -D warnings` (exit 0, no warnings),
+then `cargo test --workspace --locked` (full workspace, 0 failed across
+all crates) as a final regression check on `integration` tip. Fix commit:
+`38054b0`. Ledger: `python3 scripts/ledger.py done --todo M1.P2.S1.T3
+--commit 38054b0 --concern protocol-doc-drift-test --cmd 'cargo test -p
+rylus-core protocol_version --locked' --run` recorded a genuine 0-exit
+verification (superseding the prior self-healed, no-commit record).
+`ledger.py check --rerun` → PASS (15/15 done todos).
+
+M1's only blocking finding is now closed. `MILESTONE_PHASE` set to
+`AUDIT`, `CURRENT_MILESTONE` stays `M1` — a future tick performs the
+independent AUDIT; this tick did not self-certify the audit. Did not touch
+`master`/`origin` beyond a normal push to `integration`.
 
 ## 2026-07-20 tick — AUDIT: FAIL (1 blocking issue, master NOT fast-forwarded)
 
