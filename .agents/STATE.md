@@ -7,6 +7,21 @@
 - MILESTONE_PHASE: NORMAL
 - CURRENT_MILESTONE: M1
 
+## 2026-07-20 tick — self-heals + 3 new concerns
+
+Self-heal pass (`scripts/self-heal-check.sh <id> --cmd '<cmd>' --record`), all
+4 candidates verified PASS and recorded for free (no worker, no new commit
+content beyond ledger bookkeeping):
+- `M1.P3.S1.T2` — `crates/rylus-encode/benches/BASELINE.md` already exists (landed with `encode-bench`).
+- `M1.P2.S1.T2` — `docs/PROTOCOL.md` already contains `HeartbeatAck`/`RequestKeyframe`/`HelloNack` (landed with `protocol-doc`).
+- `M1.P9.S2.T2` (closes gate M1G5) — same doc satisfies the gate-level check too.
+- `M1.P2.S1.T3` — `cargo test -p rylus-core protocol_version` passes (`protocol_version_is_three` test already present).
+
+CLAIMED (3 disjoint concerns, dispatched to sonnet workers):
+- CLAIMED `M1.P1.S1.T2` — concern `self-test-routine` — implement the real `--self-test` routine (touches `crates/rylus-server/src/{main,rylus}.rs`, possibly `crates/rylus-core/src/config.rs`)
+- CLAIMED `M1.P9.S1.T3` — concern `fmt-fix` — mechanical `cargo fmt` fix (touches `crates/rylus-capture/src/{captrs_capture,x11}.rs`, `crates/rylus-encode/src/lib.rs`)
+- CLAIMED `M1.P3.S2.T1` — concern `bench-ci-gate` — wire a real bench regression gate into `.github/workflows/build.yml`
+
 ## 2026-07-20 tick — gate decomposition + M1 concerns
 
 First NORMAL tick with 0 done M1 todos (`ledger.py status --milestone M1`).

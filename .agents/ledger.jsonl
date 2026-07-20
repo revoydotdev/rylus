@@ -1,3 +1,7 @@
 {"commit":"024080e","concern":"self-test-flag","milestone":"M1","todo":"M1.P1.S1.T1","ts":"2026-07-20T18:37:38-0400","type":"done","verified_by":{"cmd":"cargo run -q -p rylus-server -- --help | grep -q -- '--self-test'","exit":0}}
 {"commit":"f498d1c","concern":"protocol-doc","milestone":"M1","todo":"M1.P2.S1.T1","ts":"2026-07-20T18:38:03-0400","type":"done","verified_by":{"cmd":"test -f docs/PROTOCOL.md && grep -q 'MessageInbound' docs/PROTOCOL.md && grep -q 'MessageOutbound' docs/PROTOCOL.md","exit":0}}
 {"commit":"2738d4f","concern":"encode-bench","milestone":"M1","todo":"M1.P3.S1.T1","ts":"2026-07-20T18:39:20-0400","type":"done","verified_by":{"cmd":"cargo bench -p rylus-encode --no-run","exit":0}}
+{"commit":"","concern":"","milestone":"M1","todo":"M1.P3.S1.T2","ts":"2026-07-20T18:46:59-0400","type":"done","verified_by":{"cmd":"ls crates/rylus-encode/benches/BASELINE.*","exit":0}}
+{"commit":"","concern":"","milestone":"M1","todo":"M1.P2.S1.T2","ts":"2026-07-20T18:47:00-0400","type":"done","verified_by":{"cmd":"grep -q 'HeartbeatAck' docs/PROTOCOL.md && grep -q 'RequestKeyframe' docs/PROTOCOL.md && grep -q 'HelloNack' docs/PROTOCOL.md","exit":0}}
+{"commit":"","concern":"","milestone":"M1","todo":"M1.P9.S2.T2","ts":"2026-07-20T18:47:00-0400","type":"done","verified_by":{"cmd":"test -f docs/PROTOCOL.md && grep -q 'HeartbeatAck' docs/PROTOCOL.md","exit":0}}
+{"commit":"","concern":"","milestone":"M1","todo":"M1.P2.S1.T3","ts":"2026-07-20T18:47:01-0400","type":"done","verified_by":{"cmd":"cargo test -p rylus-core protocol_version","exit":0}}
