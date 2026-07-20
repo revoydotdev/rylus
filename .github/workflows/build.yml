@@ -34,6 +34,8 @@ jobs:
       run: cargo fmt -- --check
     - name: Cargo test
       run: cargo test --workspace --locked
+    - name: Self-test
+      run: cargo run -q -p rylus-server -- --self-test
     - name: Encode benchmark regression gate
       run: ./scripts/bench-gate.sh
     - name: Frontend unit tests
