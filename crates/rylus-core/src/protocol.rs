@@ -964,9 +964,51 @@ mod tests {
         assert_eq!(PointerType::Touch, PointerType::Touch);
     }
 
+    /// Guards against `docs/PROTOCOL.md` silently drifting from the real
+    /// `PROTOCOL_VERSION` / `MIN_CLIENT_PROTOCOL_VERSION` constants below.
+    ///
+    /// This reads the doc at compile time and parses the `pub const NAME:
+    /// u32 = N;` declarations it quotes verbatim from this file, so bumping
+    /// a constant here without updating the doc fails this test instead of
+    /// silently going stale.
     #[test]
-    fn protocol_version_is_three() {
-        assert_eq!(PROTOCOL_VERSION, 3);
+    fn protocol_version_matches_docs() {
+        let doc = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../docs/PROTOCOL.md"
+        ));
+
+        fn extract_const_u32(doc: &str, name: &str) -> u32 {
+            let needle = format!("pub const {name}: u32 = ");
+            let start = doc.find(&needle).unwrap_or_else(|| {
+                panic!(
+                    "docs/PROTOCOL.md no longer documents `pub const {name}: u32 = N;` \
+                     verbatim -- update the doc to quote the real declaration"
+                )
+            }) + needle.len();
+            let rest = &doc[start..];
+            let end = rest.find(';').unwrap_or_else(|| {
+                panic!("docs/PROTOCOL.md: `{name}` declaration is missing a terminating `;`")
+            });
+            rest[..end].trim().parse().unwrap_or_else(|e| {
+                panic!("docs/PROTOCOL.md: `{name}` value is not a valid u32: {e}")
+            })
+        }
+
+        let doc_protocol_version = extract_const_u32(doc, "PROTOCOL_VERSION");
+        let doc_min_client_protocol_version = extract_const_u32(doc, "MIN_CLIENT_PROTOCOL_VERSION");
+
+        assert_eq!(
+            doc_protocol_version, PROTOCOL_VERSION,
+            "docs/PROTOCOL.md documents PROTOCOL_VERSION = {doc_protocol_version}, but \
+             protocol.rs defines PROTOCOL_VERSION = {PROTOCOL_VERSION} -- update the doc"
+        );
+        assert_eq!(
+            doc_min_client_protocol_version, MIN_CLIENT_PROTOCOL_VERSION,
+            "docs/PROTOCOL.md documents MIN_CLIENT_PROTOCOL_VERSION = \
+             {doc_min_client_protocol_version}, but protocol.rs defines \
+             MIN_CLIENT_PROTOCOL_VERSION = {MIN_CLIENT_PROTOCOL_VERSION} -- update the doc"
+        );
     }
 
     #[test]
