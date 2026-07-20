@@ -169,8 +169,7 @@ impl<S, R, FnUInput> RylusClientHandler<S, R, FnUInput> {
                             }
                         }
                         MessageInbound::ClientRtt { rtt_ms } => {
-                            if let Err(e) =
-                                self.video_sender.send(VideoCommands::ClientRtt(rtt_ms))
+                            if let Err(e) = self.video_sender.send(VideoCommands::ClientRtt(rtt_ms))
                             {
                                 warn!("Failed to send ClientRtt to video thread: {e}");
                             }

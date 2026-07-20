@@ -386,8 +386,7 @@ impl RecorderX11 {
         let conn = &self.capturable.conn.conn;
 
         // Allocate first so we can bail without trashing the current mapping.
-        let (new_id, new_addr) =
-            sysv_shm::alloc(needed).map_err(|e| CError::with_code(1, &e))?;
+        let (new_id, new_addr) = sysv_shm::alloc(needed).map_err(|e| CError::with_code(1, &e))?;
 
         let new_seg = conn
             .generate_id()
