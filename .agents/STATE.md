@@ -7,6 +7,29 @@
 - MILESTONE_PHASE: NORMAL
 - CURRENT_MILESTONE: M1
 
+## 2026-07-20 tick — RECOVER: salvage review performed, all 3 orphans landed
+
+3rd consecutive RECOVER on the same `concern/{self-test-routine,fmt-fix,bench-ci-gate}`
+orphans. Given the standing no-op for 2 prior ticks, did the deliberate salvage
+review the prior entries called for instead of re-confirming again: inspected
+each orphaned worktree's commit in isolation (`git show --stat`) and confirmed
+each touches only its own concern's files, not `.agents/STATE.md`/`ledger.jsonl`
+(the diff-vs-integration noise in those two files was purely base drift, not
+real changes) — safe to land. All 3 worktrees were clean (no uncommitted
+changes), so removed the worktree registrations (`git worktree remove`,
+branches preserved) and ran `scripts/integrate.sh` for each, gated on its real
+ROADMAP artifact command:
+- `concern/fmt-fix` → `764d89e` — gate `cargo fmt -- --check` — closes `M1.P9.S1.T3`
+- `concern/bench-ci-gate` → `afb88c2` — gate `grep -q bench .github/workflows/build.yml` — closes `M1.P3.S2.T1`
+- `concern/self-test-routine` → `281b4df` — gate `cargo run -q -p rylus-server -- --self-test` (real headless capture→encode→bind→accept run, exit 0) — closes `M1.P1.S1.T2`
+
+Recorded all 3 via `ledger.py done --run` (each re-verified the real command
+during recording, not trusted from the integrate gate alone). Deleted the 3
+now-merged `concern/*` branches. `ledger.py check --rerun` → PASS (10/10 done
+todos, structural+rerun). `preflight.sh` and `worktree-check.sh` both clean —
+no more salvage blocker. M1 now 10/15 todos done; 5 remain for a future NORMAL
+tick.
+
 ## 2026-07-20 tick — RECOVER (2nd consecutive tick, unchanged): salvage still blocking
 
 `preflight.sh` → `RECOVER:concern-worktrees;concern-branches` again, identical

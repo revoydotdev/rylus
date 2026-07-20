@@ -5,3 +5,6 @@
 {"commit":"","concern":"","milestone":"M1","todo":"M1.P2.S1.T2","ts":"2026-07-20T18:47:00-0400","type":"done","verified_by":{"cmd":"grep -q 'HeartbeatAck' docs/PROTOCOL.md && grep -q 'RequestKeyframe' docs/PROTOCOL.md && grep -q 'HelloNack' docs/PROTOCOL.md","exit":0}}
 {"commit":"","concern":"","milestone":"M1","todo":"M1.P9.S2.T2","ts":"2026-07-20T18:47:00-0400","type":"done","verified_by":{"cmd":"test -f docs/PROTOCOL.md && grep -q 'HeartbeatAck' docs/PROTOCOL.md","exit":0}}
 {"commit":"","concern":"","milestone":"M1","todo":"M1.P2.S1.T3","ts":"2026-07-20T18:47:01-0400","type":"done","verified_by":{"cmd":"cargo test -p rylus-core protocol_version","exit":0}}
+{"commit":"764d89e","concern":"fmt-fix","milestone":"M1","todo":"M1.P9.S1.T3","ts":"2026-07-20T19:14:47-0400","type":"done","verified_by":{"cmd":"cargo fmt -- --check","exit":0}}
+{"commit":"afb88c2","concern":"bench-ci-gate","milestone":"M1","todo":"M1.P3.S2.T1","ts":"2026-07-20T19:14:49-0400","type":"done","verified_by":{"cmd":"grep -q 'bench' .github/workflows/build.yml","exit":0}}
+{"commit":"281b4df","concern":"self-test-routine","milestone":"M1","todo":"M1.P1.S1.T2","ts":"2026-07-20T19:14:52-0400","type":"done","verified_by":{"cmd":"cargo run -q -p rylus-server -- --self-test","exit":0}}
