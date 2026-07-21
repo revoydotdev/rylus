@@ -119,6 +119,17 @@ posture, and turn "latency is the product" from an assertion into a measurement
 - **M2G4** — Dependency audit passes. → *Check:* `cargo audit`
 - **M2G5** — a11y audit runs and passes. → *Check:* `npm run a11y`
 
+### M2.P9.S1 — Security & dependency gates
+
+- **`M2.P9.S1.T1`** — Close M2G1: Origin enforcement is proven by test. → *Artifact:* `cargo test -p rylus-server origin` · *Concern:* security
+- **`M2.P9.S1.T2`** — Close M2G2: security review document exists. → *Artifact:* `test -f docs/SECURITY-REVIEW.md` · *Concern:* docs
+- **`M2.P9.S1.T3`** — Close M2G4: dependency audit passes clean. → *Artifact:* `cargo audit` · *Concern:* security
+
+### M2.P9.S2 — Latency & accessibility gates
+
+- **`M2.P9.S2.T1`** — Close M2G3: latency budget is recorded. → *Artifact:* `test -f docs/LATENCY.md` · *Concern:* docs
+- **`M2.P9.S2.T2`** — Close M2G5: a11y audit runs and passes. → *Artifact:* `npm run a11y` · *Concern:* a11y
+
 ---
 
 # M3 — Notarized universal macOS DMG

@@ -7,6 +7,16 @@
 - MILESTONE_PHASE: NORMAL
 - CURRENT_MILESTONE: M2
 
+## 2026-07-20 tick — NORMAL: M2 gate decomposition
+
+First NORMAL tick of M2 (`ledger.py status --milestone M2` showed 0 done).
+Decomposed M2G1-M2G5 into explicit gate-closing todos under a new
+`M2.P9.S1`/`M2.P9.S2` section in ROADMAP.md, mirroring the M1.P9 pattern:
+M2.P9.S1.T1-3 (Origin test, security doc, cargo audit) and M2.P9.S2.T1-2
+(latency doc, a11y audit). `ledger.py next --milestone M2` now shows 13
+unclaimed todos (was 8). Supervisor dispatch for feature concerns follows
+in this same tick.
+
 ## 2026-07-20 tick — AUDIT: PASS, master fast-forwarded to M1
 
 Sole-turn audit, no worker agents dispatched. Independently re-verified all
