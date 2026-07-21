@@ -999,6 +999,7 @@ async fn run_server(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use clap::Parser;
 
     // ---- hash_access_code / verify_access_code ----
 
@@ -1238,5 +1239,134 @@ mod tests {
     #[test]
     fn tls_or_tcp_stream_tcp_variant() {
         let _stream = TlsOrTcpStream::Tcp;
+    }
+
+    // ---- ws_origin_matches_host (integration, via a real Rylus server) ----
+    //
+    // `ws_origin_matches_host` takes `&Request<Incoming>`, and `Incoming` is
+    // tied to a real hyper connection with no simple standalone constructor.
+    // Rather than fake that type, these tests boot a real `Rylus` server on
+    // a loopback ephemeral port (TLS disabled, no access code, no mDNS) and
+    // drive the actual `/ws` route with a hand-rolled raw-TCP HTTP/1.1
+    // upgrade request, mirroring the pattern in `self_test.rs`'s
+    // `run_bind_and_accept`/`ws_upgrade_probe`. This exercises the real
+    // enforcement path end to end, not just the header-comparison helper.
+
+    /// Boots a real `Rylus` server on an ephemeral loopback port with TLS,
+    /// access codes, and mDNS disabled. Callers must call `.stop()` on the
+    /// returned server when done.
+    fn boot_test_server_for_origin_test() -> (crate::rylus::Rylus, SocketAddr) {
+        let loopback: IpAddr = IpAddr::from([127, 0, 0, 1]);
+        let port = {
+            let probe = std::net::TcpListener::bind((loopback, 0))
+                .expect("failed to reserve an ephemeral port");
+            probe
+                .local_addr()
+                .expect("failed to read reserved port")
+                .port()
+        };
+        let addr = SocketAddr::new(loopback, port);
+
+        let mut config = rylus_core::config::Config::parse_from::<_, &str>(["rylus-origin-test"]);
+        config.bind_address = loopback;
+        config.web_port = port;
+        config.access_code = None;
+        config.tls_mode = Some("disabled".to_string());
+        config.no_mdns = true;
+
+        let mut server = crate::rylus::Rylus::new();
+        let started = server.start(&config, Box::new(|_msg| {}));
+        assert!(started, "Rylus::start failed to bind {addr}");
+        (server, addr)
+    }
+
+    /// Sends a raw HTTP/1.1 WebSocket upgrade request to `/ws` on `addr`,
+    /// with an optional `Origin` header, and returns the response status
+    /// line.
+    fn ws_upgrade_probe_with_origin(addr: SocketAddr, origin: Option<&str>) -> String {
+        use std::io::{Read, Write};
+
+        let timeout = Duration::from_secs(5);
+        let mut stream = std::net::TcpStream::connect_timeout(&addr, timeout)
+            .expect("TCP connect should succeed");
+        stream
+            .set_read_timeout(Some(timeout))
+            .expect("failed to set read timeout");
+        stream
+            .set_write_timeout(Some(timeout))
+            .expect("failed to set write timeout");
+
+        let origin_header = origin
+            .map(|o| format!("Origin: {o}\r\n"))
+            .unwrap_or_default();
+        let request = format!(
+            "GET /ws HTTP/1.1\r\n\
+             Host: {addr}\r\n\
+             {origin_header}\
+             Connection: Upgrade\r\n\
+             Upgrade: websocket\r\n\
+             Sec-WebSocket-Version: 13\r\n\
+             Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\
+             \r\n"
+        );
+        stream
+            .write_all(request.as_bytes())
+            .expect("failed to write upgrade request");
+
+        let mut buf = Vec::new();
+        let mut chunk = [0u8; 512];
+        loop {
+            let n = stream
+                .read(&mut chunk)
+                .expect("failed to read upgrade response");
+            if n == 0 {
+                break;
+            }
+            buf.extend_from_slice(&chunk[..n]);
+            if buf.windows(4).any(|w| w == b"\r\n\r\n") {
+                break;
+            }
+            assert!(
+                buf.len() <= 8192,
+                "upgrade response exceeded 8 KiB without a header terminator"
+            );
+        }
+
+        let response = String::from_utf8_lossy(&buf);
+        response.lines().next().unwrap_or("").to_string()
+    }
+
+    #[test]
+    fn ws_upgrade_same_origin_accepted() {
+        let (mut server, addr) = boot_test_server_for_origin_test();
+        let origin = format!("http://{addr}");
+        let status_line = ws_upgrade_probe_with_origin(addr, Some(&origin));
+        server.stop();
+        assert!(
+            status_line.contains("101"),
+            "expected 101 Switching Protocols for a same-origin upgrade, got: {status_line:?}"
+        );
+    }
+
+    #[test]
+    fn ws_upgrade_foreign_origin_rejected() {
+        let (mut server, addr) = boot_test_server_for_origin_test();
+        let status_line = ws_upgrade_probe_with_origin(addr, Some("http://evil.example.com"));
+        server.stop();
+        assert!(
+            status_line.contains("403"),
+            "expected 403 Forbidden for a foreign-origin upgrade, got: {status_line:?}"
+        );
+    }
+
+    #[test]
+    fn ws_upgrade_absent_origin_accepted() {
+        let (mut server, addr) = boot_test_server_for_origin_test();
+        let status_line = ws_upgrade_probe_with_origin(addr, None);
+        server.stop();
+        assert!(
+            status_line.contains("101"),
+            "expected 101 Switching Protocols for an absent-Origin upgrade, got: {status_line:?}"
+        );
     }
 }
