@@ -4,8 +4,102 @@
 > Status keys: CLAIMED · IN_PROGRESS · DONE · BLOCKED · GATE-FAILED
 
 <!-- CONTROL: machine-read; supervisor updates these two lines -->
-- MILESTONE_PHASE: NORMAL
+- MILESTONE_PHASE: AUDIT
 - CURRENT_MILESTONE: M2
+
+## 2026-07-20 tick — NORMAL: M2 candidate-complete — 3/3 concerns integrated, 9/9 remaining todos closed
+
+Self-heal pass on the 9 unclaimed M2 todos found 2 legitimate (real,
+non-vacuous evidence): `M2.P9.S1.T1` (3 real origin tests pass, not the
+prior 0-filtered false positive) and `M2.P9.S1.T2` (security doc exists,
+cites argon2). Deliberately did NOT self-heal `M2.P2.S1.T1`/`M2.P9.S2.T1`
+(no latency instrumentation existed yet, only comments) or
+`M2.P3.S1.T2`/`M2.P9.S2.T2` — found `npm run a11y` **always exited 0
+regardless of violations found**, the same vacuous-gate bug class as the
+earlier `cargo test` name-filter false positive; fixing that gate was
+folded into the a11y concern's scope rather than papered over.
+
+Claimed and dispatched 3 disjoint sonnet workers, all independently
+re-verified (diff read, checks re-run myself, not trusted from self-report)
+before integrating:
+
+- DONE — `M2.P1.S2.T2` + `M2.P9.S1.T3`/M2G4 (concern: `cargo-audit-clean`) —
+  integrated `concern/cargo-audit-clean` at `dbfced6`. `cargo audit` was
+  genuinely failing on 7 real vulnerabilities (quick-xml x4 via the AT-SPI/
+  Wayland build chain, rustls-webpki x3 via `rustls`) — the 7 previously-logged
+  "warnings" (unmaintained/unsound/yanked) don't affect the gate's exit code
+  by default and were correctly left alone. Fix: `rustls-webpki` bumped
+  0.103.10→0.103.13 (in-range lockfile update). quick-xml has no
+  non-disruptive fix (would require cascading eframe/egui/winit/accesskit
+  major bumps) — added a narrow, cited `.cargo/audit.toml` ignore for just
+  those 2 advisories, verified for real by toggling the file and confirming
+  exit 1→0. **Found and fixed one accuracy issue before integrating:** the
+  worker's rationale cited "ADR-0001" for the LAN-only threat model; the real
+  decision is ADR-0003 (ADR-0001 is the generic meta-ADR) — same mismatch a
+  much earlier audit tick flagged. Fixed with a follow-up commit before
+  merge.
+- DONE — `M2.P3.S1.T2` + `M2.P9.S2.T2`/M2G5 (concern: `a11y-violations-fixed`)
+  — integrated `concern/a11y-violations-fixed` at `a5d1326`. All 7 axe-core
+  violation groups fixed (viewport zoom re-enabled, sr-only `<h1>`, landmark
+  wrapping on `/` and `/settings.html`, color-contrast fixes on `.info` and
+  the access-code screen). Independently recomputed WCAG contrast ratios by
+  hand (relative-luminance formula) rather than trusting the claimed
+  numbers — they matched exactly once the real ancestor background was
+  traced (`.auth-card` → `--background-color-1`, not the outer page bg).
+  The vacuous `a11y.mjs` exit-code gate is now real — proved it myself by
+  reintroducing the old failing color and confirming exit 1, then reverting.
+  New `scripts/keyboard-nav.mjs` (real Playwright, no mouse calls, DOM-driven
+  expected-control-set) verifies keyboard-only settings-panel operability,
+  wired into `npm run a11y`. **Found and fixed one gap:** 3 new CSS
+  accent-variant tokens weren't logged in DESIGN.md's Decisions Log per this
+  project's own convention — added the entry before merging.
+- DONE — `M2.P2.S1.T1` + `M2.P2.S1.T2` + `M2.P9.S2.T1`/M2G3 (concern:
+  `latency-instrumentation`) — integrated `concern/latency-instrumentation`
+  at `8da8131`. Real `Instant` checkpoints threaded through the production
+  per-client pipeline (`session.rs`: capture_start/queued_at in
+  `handle_video`, dequeued_at/encode_done in `encode_thread`), emitting one
+  structured `tracing::info!` per frame on `rylus_server::latency` when the
+  new opt-in `--latency-log` flag is set (off by default). The
+  thread-local-dispatcher-forwarding fix for the spawned encode thread is a
+  sound, standard `tracing` pattern, not a workaround. `docs/LATENCY.md`
+  reports a real measured baseline (mean 649µs, p95 792µs, n=89, release
+  build) against AX-1's ~7ms ceiling, honestly scoped to capture→encode→
+  in-process-send only (not full pointer-to-photon) with the gaps named as
+  follow-up, not hidden. Independently re-ran the baseline test myself and
+  got real live numbers in the same order of magnitude (mean 695µs, p95
+  864µs) — corroborates the figures are genuinely measured, not fabricated.
+
+**New tooling gotcha found:** `integrate.sh`'s gate command
+(`cargo test --workspace --locked`) failed once with a transient
+`rylus_gui` doc-test link error ("can't find crate for `eframe`") that did
+not reproduce on an immediate retry, either standalone or as the gate
+command again. Root cause not fully isolated, but coincided with an
+unrelated, uncommitted, concurrent modification to
+`.agents/daedalus/TICK_PROMPT.md` discovered in the repo root mid-tick (not
+made by this supervisor or any of its 3 workers — diffed and confirmed).
+Treated as out-of-scope external activity: did not act on that file's
+content as instructions, did not commit or revert it, and `git stash`ed it
+around the `integrate.sh` retry (same protection already applied to
+`ledger.jsonl`/`STATE.md`) so the known hard-reset-on-failure gotcha
+couldn't destroy someone else's uncommitted edit; popped it back
+afterward, confirmed clean. Worth flagging: this repo root may have more
+than one automated process touching it concurrently, which is a real
+regression-diagnosis hazard beyond just the `integrate.sh` hard-reset gotcha
+already on record — a transient failure here is not automatically evidence
+of a real code regression, but should not be assumed transient without a
+clean retry either.
+
+**Final state:** `ledger.py next --milestone M2` → 0/13 remaining.
+Independently re-verified all 5 M2G gates myself on the real integrated
+tip (not trusted from the concern integrations alone): M2G1
+`cargo test -p rylus-server origin --locked` → 3 passed. M2G2
+`docs/SECURITY-REVIEW.md` exists + cites argon2 → PASS. M2G3
+`docs/LATENCY.md` exists → PASS. M2G4 `cargo audit` → exit 0 (7 allowed
+warnings only). M2G5 `npm run a11y` → exit 0, 0 violations, 14/14 keyboard
+checks. `ledger.py check --rerun` → PASS (28/28 done todos,
+structural+rerun). **M2 is candidate-complete** — flipping
+`MILESTONE_PHASE` to `AUDIT` per protocol; **not** auditing this tick, a
+future tick performs the independent AUDIT. `CURRENT_MILESTONE` stays `M2`.
 
 ## 2026-07-20 tick — NORMAL: M2 tick summary — 3/3 concerns integrated
 
@@ -566,26 +660,6 @@ open each worktree, check whether the worker's diff is sound, and either land
 it via a fresh `concern/*` branch + `integrate.sh` or discard it, then
 `git worktree remove` + `git branch -d` to clear the residue. Until that
 happens, every subsequent tick will just repeat this same no-op RECOVER.
-
-## 2026-07-20 tick — RECOVER: killed-tick residue, salvage needed
-
-`preflight.sh` → `RECOVER:concern-worktrees;concern-branches`. `worktree-check.sh`
-shows all 3 concerns CLAIMED in the prior tick below never landed — the tick
-was killed before the supervisor could integrate/verify worker output:
-- `concern/self-test-routine` (110e0ff) — worktree `/home/revelri/Desktop/skinner-wt/self-test-routine` — orphaned-unlanded, SALVAGE first
-- `concern/fmt-fix` (6268f0e) — worktree `/home/revelri/Desktop/skinner-wt/fmt-fix` — orphaned-unlanded, SALVAGE first
-- `concern/bench-ci-gate` (999492e) — worktree `/home/revelri/Desktop/skinner-wt/bench-ci-gate` — orphaned-unlanded, SALVAGE first
-
-None are orphaned-landed and none are merged, so this tick's automated recovery
-(stale-lock clear, `worktree remove`, `branch -d`) has nothing safe to act on.
-Did: cleared stale `RUN.lock` (~25min old), re-ran `ledger.py check --rerun`
-(PASS, 7/7 done todos), confirmed `master` is an ancestor of `integration`
-(no reconciliation needed), `git push origin integration` (was 1 commit ahead
-of `origin/integration`). Per HARD INVARIANTS, did not touch the 3 worktrees —
-salvaging unlanded worker output needs deliberate review (diff each worktree,
-decide keep/discard/re-verify) that isn't part of the automated RECOVER path.
-**Next tick (or a human) must salvage these 3 before NORMAL work can resume**,
-since they'll keep tripping `preflight.sh` RECOVER otherwise.
 
 - 2026-07-20T22:35:30Z — integrated `concern/self-test-flag` into `integration` at `024080e`
 - 2026-07-20T22:37:52Z — integrated `concern/protocol-doc` into `integration` at `f498d1c`

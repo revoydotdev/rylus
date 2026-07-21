@@ -54,3 +54,24 @@ should add them to `.gitignore`; if they're stale, remove manually.
 
 ## enrollment
 Scaffolded into the swarm by `enroll.py` (ADR-0028). Awaiting its first tick.
+
+<!-- rotated  : 1 entries + 0 intlog lines -->
+## 2026-07-20 tick — RECOVER: killed-tick residue, salvage needed
+
+`preflight.sh` → `RECOVER:concern-worktrees;concern-branches`. `worktree-check.sh`
+shows all 3 concerns CLAIMED in the prior tick below never landed — the tick
+was killed before the supervisor could integrate/verify worker output:
+- `concern/self-test-routine` (110e0ff) — worktree `/home/revelri/Desktop/skinner-wt/self-test-routine` — orphaned-unlanded, SALVAGE first
+- `concern/fmt-fix` (6268f0e) — worktree `/home/revelri/Desktop/skinner-wt/fmt-fix` — orphaned-unlanded, SALVAGE first
+- `concern/bench-ci-gate` (999492e) — worktree `/home/revelri/Desktop/skinner-wt/bench-ci-gate` — orphaned-unlanded, SALVAGE first
+
+None are orphaned-landed and none are merged, so this tick's automated recovery
+(stale-lock clear, `worktree remove`, `branch -d`) has nothing safe to act on.
+Did: cleared stale `RUN.lock` (~25min old), re-ran `ledger.py check --rerun`
+(PASS, 7/7 done todos), confirmed `master` is an ancestor of `integration`
+(no reconciliation needed), `git push origin integration` (was 1 commit ahead
+of `origin/integration`). Per HARD INVARIANTS, did not touch the 3 worktrees —
+salvaging unlanded worker output needs deliberate review (diff each worktree,
+decide keep/discard/re-verify) that isn't part of the automated RECOVER path.
+**Next tick (or a human) must salvage these 3 before NORMAL work can resume**,
+since they'll keep tripping `preflight.sh` RECOVER otherwise.
