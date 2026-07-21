@@ -5,12 +5,15 @@
     "build:dev": "esbuild ts/lib.ts --bundle --target=es2020 --outfile=www/static/lib.js && esbuild ts/sw.ts --bundle --target=es2020 --outfile=www/static/sw.js",
     "watch": "esbuild ts/lib.ts --bundle --target=es2020 --outfile=www/static/lib.js --watch",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "a11y": "node scripts/a11y.mjs"
   },
   "devDependencies": {
     "@vitest/coverage-v8": "^4.1.2",
+    "axe-core": "^4.12.1",
     "esbuild": "^0.27.4",
     "jsdom": "^29.0.1",
+    "playwright": "^1.61.1",
     "vitest": "^4.1.2"
   }
 }
