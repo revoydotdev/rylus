@@ -625,3 +625,4 @@ Scaffolded into the swarm by `enroll.py` (ADR-0028). Awaiting its first tick.
 - 2026-07-20T23:37:49Z — integrated `concern/fix-selftest-test` into `integration` at `4989af3`
 - 2026-07-21T00:10:39Z — integrated `concern/origin-test` into `integration` at `eb7bec4`
 - 2026-07-21T00:12:02Z — integrated `concern/security-review-doc` into `integration` at `1ab1142`
+- 2026-07-21T00:12:23Z — integrated `concern/axe-a11y-wiring` into `integration` at `a60068b`
