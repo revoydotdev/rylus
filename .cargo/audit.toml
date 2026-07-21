@@ -1,0 +1,30 @@
+# cargo-audit config: narrowly documented allowances.
+#
+# M2.P1.S2.T2 dependency audit — quick-xml (RUSTSEC-2026-0194, RUSTSEC-2026-0195)
+#
+# Both advisories reach rylus-server only through the desktop GUI's
+# accessibility/windowing stack, never through network- or peer-controlled
+# input:
+#   - quick-xml 0.30.0 via zbus_xml -> zbus-lockstep -> atspi-common ->
+#     accesskit_atspi_common -> accesskit_unix -> accesskit_winit ->
+#     egui-winit -> eframe -> rylus-gui  (Linux AT-SPI a11y bridge; parses
+#     locally-generated D-Bus introspection XML, not attacker input)
+#   - quick-xml 0.39.2 via wayland-scanner (a proc-macro BUILD-dependency)
+#     -> smithay-client-toolkit -> winit -> eframe -> rylus-gui  (build-time
+#     codegen from bundled Wayland protocol XML, never runs against
+#     untrusted/network input)
+#
+# rylus is a LAN-only screen-mirroring tool (ADR-0001); this XML parsing is
+# not exposed to the network/attacker-controlled input path the advisories
+# describe. Fixing requires quick-xml >=0.41.0, which is not reachable
+# without a major-version cascade across the whole egui/eframe/winit/
+# accesskit/zbus-lockstep toolchain (eframe 0.31->0.35, egui-winit
+# 0.31->0.35, accesskit_winit 0.23->0.33, accesskit_unix 0.13->0.22,
+# accesskit_atspi_common 0.10->0.19, zbus-lockstep 0.4->0.6) — out of scope
+# for this task. Tracked as a follow-up; revisit when the GUI toolchain is
+# next upgraded.
+[advisories]
+ignore = [
+    "RUSTSEC-2026-0194",
+    "RUSTSEC-2026-0195",
+]
