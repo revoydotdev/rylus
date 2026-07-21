@@ -7,6 +7,49 @@
 - MILESTONE_PHASE: NORMAL
 - CURRENT_MILESTONE: M2
 
+## 2026-07-20 tick — NORMAL: M2 dispatch (self-heal correction + 3 concerns)
+
+Self-heal pass before dispatch surfaced a real gap: `M2.P1.S1.T1` (origin
+audit/grep artifact) self-healed legitimately — read `web.rs:279-301,535-546`
+and confirmed `ws_origin_matches_host` is genuinely wired into the `/ws`
+upgrade path (403 on mismatch). But `M2.P1.S1.T2`'s self-heal via
+`cargo test -p rylus-server origin` was VACUOUS — `cargo test` exits 0 even
+when the name filter matches 0 tests (67 filtered out, 0 run) — so it was
+killed via `ledger.py kill` with reason logged, matching the same class of
+false-positive the M1 audit caught for `protocol_version`.
+
+Also probed `cargo audit` directly (informational, not claimed this tick): it
+currently fails with 7 advisories (anyhow downcast_mut unsoundness, memmap2
+unchecked offset, rand 0.8/0.9 logger unsoundness, a yanked `spin` build) —
+real work for `M2.P1.S2.T2`/`M2.P9.S1.T3` in a future tick, not a self-heal.
+
+CLAIMED this tick (3 disjoint concerns), all dispatched to sonnet workers in
+worktrees off `integration`:
+- DONE — `M2.P1.S1.T2` (concern: `origin-test`) — integrated `concern/origin-test`
+  at `eb7bec4` (ff-merge `4f4d696`) — real `#[test]`s boot a loopback `Rylus`
+  server and drive raw-TCP `/ws` upgrades: same-origin → 101, foreign Origin →
+  403, absent Origin → 101. Verified `cargo test -p rylus-server origin` exit 0
+  independently (3 passed) both pre- and post-integration, not just trusted
+  the worker's self-report.
+- CLAIMED `M2.P1.S2.T1` (concern: `security-review-doc`) — write
+  `docs/SECURITY-REVIEW.md` from the real argon2/rate-limit/TLS/session/
+  control-frame/Origin code, not invented claims.
+- CLAIMED `M2.P3.S1.T1` (concern: `axe-a11y-wiring`) — wire a real axe-core
+  audit runnable via `npm run a11y` over the web client routes.
+
+**Tooling gotcha found:** `scripts/integrate.sh`'s failure path does
+`git reset --hard "$PRE_REBASE_SHA"` on whatever branch is currently checked
+out when the rebase step fails — if the supervisor's repo root had
+uncommitted changes to shared files (`.agents/STATE.md`/`ledger.jsonl`) at
+invocation time, "You have unstaged changes" aborts the rebase and the hard
+reset silently discards those uncommitted edits, not just the failed
+rebase's partial state. Hit this once this tick (lost and had to re-record
+the `M2.P1.S1.T1`/`M2.P1.S1.T2` self-heal entries above). Workaround used for
+the rest of this tick: `git stash` any shared-file edits before calling
+`integrate.sh`, `git stash pop` after. Worth a future todo to make
+`integrate.sh` refuse to run (not silently eat working-tree state) when the
+repo root has uncommitted changes before it ever touches HEAD.
+
 ## 2026-07-20 tick — NORMAL: M2 gate decomposition
 
 First NORMAL tick of M2 (`ledger.py status --milestone M2` showed 0 done).
