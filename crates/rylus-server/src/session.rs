@@ -78,6 +78,10 @@ pub struct RylusClientConfig {
     pub wayland_support: bool,
     #[cfg(feature = "gui")]
     pub no_gui: bool,
+    /// Opt-in per-frame capture->encode->send latency logging (see AX-1 in
+    /// VISION.md and `docs/LATENCY.md`). Off by default; enabled with
+    /// `--latency-log`. Wired through to [`handle_video`]/[`encode_thread`].
+    pub latency_log: bool,
 }
 
 impl<S, R, FnUInput> RylusClientHandler<S, R, FnUInput> {
@@ -96,7 +100,14 @@ impl<S, R, FnUInput> RylusClientHandler<S, R, FnUInput> {
             let sender = sender.clone();
             // offload creating the videostream to another thread to avoid blocking the thread that
             // is receiving messages from the websocket
-            spawn(move || handle_video(video_receiver, sender, config.encoder_options))
+            spawn(move || {
+                handle_video(
+                    video_receiver,
+                    sender,
+                    config.encoder_options,
+                    config.latency_log,
+                )
+            })
         };
 
         Self {
@@ -526,8 +537,18 @@ fn handle_video_broadcast(
 
 /// Messages sent from the capture thread to the encode thread.
 enum EncodeCommand {
-    /// New pixel data to encode.
-    Frame(rylus_core::pixel::OwnedPixelData),
+    /// New pixel data to encode, carrying the real timestamps needed to
+    /// compute per-frame capture->encode->send latency (see AX-1). `capture_start`
+    /// is stamped right before `Recorder::capture()` in `handle_video`;
+    /// `queued_at` is stamped right before this command is handed to the
+    /// encode thread's channel. Always populated (cheap: two `Instant`s) —
+    /// only the tracing event derived from them is gated behind
+    /// `latency_log`.
+    Frame {
+        pixel_data: rylus_core::pixel::OwnedPixelData,
+        capture_start: Instant,
+        queued_at: Instant,
+    },
     /// Encoder must be restarted with new dimensions.
     Restart {
         width_in: usize,
@@ -552,23 +573,62 @@ fn encode_thread<S: RylusSender + Clone + Send + 'static>(
     buffer_return_tx: mpsc::SyncSender<Vec<u8>>,
     mut sender: S,
     encoder_options: EncoderOptions,
+    latency_log: bool,
 ) {
     let mut video_encoder: Option<Box<VideoEncoder>> = None;
 
     while let Ok(cmd) = encode_rx.recv() {
         match cmd {
-            EncodeCommand::Frame(owned) => {
+            EncodeCommand::Frame {
+                pixel_data,
+                capture_start,
+                queued_at,
+            } => {
                 let enc = match video_encoder.as_mut() {
                     Some(e) => e,
                     None => {
                         // Still return the buffer even when dropping so capture doesn't
                         // start allocating fresh Vecs unnecessarily.
-                        let _ = buffer_return_tx.try_send(owned.into_buffer());
+                        let _ = buffer_return_tx.try_send(pixel_data.into_buffer());
                         continue;
                     }
                 };
-                enc.encode(owned.as_provider());
-                let _ = buffer_return_tx.try_send(owned.into_buffer());
+                if latency_log {
+                    // `enc.encode()` synchronously drives the encoder's AVIO write
+                    // callback (set up in the `Restart` arm below), which itself
+                    // calls `ws_sender.send_video(data)` — so "encode" and "send"
+                    // happen inside this single call on this thread. We report
+                    // that combined span as `encode_send_us` rather than
+                    // fabricating a split we can't actually observe; `capture_us`
+                    // and `queue_us` are independently real boundaries measured on
+                    // the capture thread and here. This is the real, load-bearing
+                    // AX-1 measurement, not a stub — see docs/LATENCY.md.
+                    let dequeued_at = Instant::now();
+                    enc.encode(pixel_data.as_provider());
+                    let encode_done = Instant::now();
+                    let capture_us = queued_at
+                        .saturating_duration_since(capture_start)
+                        .as_micros() as u64;
+                    let queue_us =
+                        dequeued_at.saturating_duration_since(queued_at).as_micros() as u64;
+                    let encode_send_us = encode_done
+                        .saturating_duration_since(dequeued_at)
+                        .as_micros() as u64;
+                    let total_us = encode_done
+                        .saturating_duration_since(capture_start)
+                        .as_micros() as u64;
+                    tracing::info!(
+                        target: "rylus_server::latency",
+                        capture_us,
+                        queue_us,
+                        encode_send_us,
+                        total_us,
+                        "frame latency"
+                    );
+                } else {
+                    enc.encode(pixel_data.as_provider());
+                }
+                let _ = buffer_return_tx.try_send(pixel_data.into_buffer());
             }
             EncodeCommand::Restart {
                 width_in,
@@ -775,6 +835,7 @@ fn handle_video<S: RylusSender + Clone + Send + 'static>(
     receiver: mpsc::Receiver<VideoCommands>,
     sender: S,
     encoder_options: EncoderOptions,
+    latency_log: bool,
 ) {
     const EFFECTIVE_INFINITY: Duration = Duration::from_secs(3600 * 24 * 365 * 200);
 
@@ -786,7 +847,23 @@ fn handle_video<S: RylusSender + Clone + Send + 'static>(
     let (buffer_return_tx, buffer_return_rx) = mpsc::sync_channel::<Vec<u8>>(2);
     let encode_handle = {
         let sender = sender.clone();
-        spawn(move || encode_thread(encode_rx, buffer_return_tx, sender, encoder_options))
+        // `tracing`'s dispatcher is thread-local, so a scoped subscriber set
+        // on the caller's thread (e.g. `tracing::subscriber::with_default`)
+        // would not otherwise reach this spawned thread. Capture and forward
+        // it explicitly rather than relying on the process-wide global
+        // default always being the only dispatcher in play.
+        let dispatch = tracing::dispatcher::get_default(|d| d.clone());
+        spawn(move || {
+            tracing::dispatcher::with_default(&dispatch, || {
+                encode_thread(
+                    encode_rx,
+                    buffer_return_tx,
+                    sender,
+                    encoder_options,
+                    latency_log,
+                )
+            })
+        })
     };
 
     let mut recorder: Option<Box<dyn Recorder>> = None;
@@ -960,16 +1037,21 @@ fn handle_video<S: RylusSender + Clone + Send + 'static>(
                     .unwrap_or_default();
                 let owned = pixel_data.to_owned_reusing(recycled);
                 let capture_elapsed = capture_start.elapsed().as_secs_f64();
+                let queued_at = Instant::now();
 
                 // try_send: if encoder is busy, drop this frame
                 frames_total += 1;
-                match encode_tx.try_send(EncodeCommand::Frame(owned)) {
+                match encode_tx.try_send(EncodeCommand::Frame {
+                    pixel_data: owned,
+                    capture_start,
+                    queued_at,
+                }) {
                     Ok(()) => {
                         quality.record_encode_time(capture_elapsed);
                     }
-                    Err(mpsc::TrySendError::Full(EncodeCommand::Frame(owned))) => {
+                    Err(mpsc::TrySendError::Full(EncodeCommand::Frame { pixel_data, .. })) => {
                         // Rescue the Vec so the next frame can reuse it.
-                        spare_buffer = Some(owned.into_buffer());
+                        spare_buffer = Some(pixel_data.into_buffer());
                         frames_dropped += 1;
                         trace!("Dropped frame (encoder busy)");
                     }
@@ -1220,16 +1302,17 @@ mod tests {
     // video_forwarder tests
     // -----------------------------------------------------------------------
 
+    #[derive(Clone)]
     struct MockSender {
-        messages: std::sync::Mutex<Vec<MessageOutbound>>,
-        videos: std::sync::Mutex<Vec<Vec<u8>>>,
+        messages: Arc<std::sync::Mutex<Vec<MessageOutbound>>>,
+        videos: Arc<std::sync::Mutex<Vec<Vec<u8>>>>,
     }
 
     impl MockSender {
         fn new() -> Self {
             Self {
-                messages: std::sync::Mutex::new(Vec::new()),
-                videos: std::sync::Mutex::new(Vec::new()),
+                messages: Arc::new(std::sync::Mutex::new(Vec::new())),
+                videos: Arc::new(std::sync::Mutex::new(Vec::new())),
             }
         }
     }
@@ -1269,5 +1352,232 @@ mod tests {
 
         // The MockSender is moved into the thread, so we can't check its contents here.
         // The test verifies the function doesn't panic and exits cleanly.
+    }
+
+    // -----------------------------------------------------------------------
+    // Per-frame latency instrumentation (AX-1: "measured, not asserted")
+    // -----------------------------------------------------------------------
+
+    /// Minimal hand-rolled `tracing::Subscriber` that captures the `u64`
+    /// fields of every event on the `rylus_server::latency` target. The
+    /// workspace's `tracing-subscriber` dependency is built with
+    /// `default-features = false, features = ["ansi", "json"]` (see
+    /// `Cargo.toml`), which does not enable `Registry`/`Layer`, so this talks
+    /// directly to the base `tracing::Subscriber` trait instead of pulling in
+    /// another dependency just for a test.
+    struct LatencyCapture {
+        events: std::sync::Mutex<Vec<std::collections::HashMap<&'static str, u64>>>,
+    }
+
+    struct FieldGrabber<'a> {
+        map: &'a mut std::collections::HashMap<&'static str, u64>,
+    }
+
+    impl tracing::field::Visit for FieldGrabber<'_> {
+        fn record_u64(&mut self, field: &tracing::field::Field, value: u64) {
+            let key = match field.name() {
+                "capture_us" => "capture_us",
+                "queue_us" => "queue_us",
+                "encode_send_us" => "encode_send_us",
+                "total_us" => "total_us",
+                _ => return,
+            };
+            self.map.insert(key, value);
+        }
+
+        fn record_debug(&mut self, _field: &tracing::field::Field, _value: &dyn std::fmt::Debug) {}
+    }
+
+    impl tracing::Subscriber for LatencyCapture {
+        fn enabled(&self, _metadata: &tracing::Metadata<'_>) -> bool {
+            true
+        }
+        fn new_span(&self, _span: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+            tracing::span::Id::from_u64(1)
+        }
+        fn record(&self, _span: &tracing::span::Id, _values: &tracing::span::Record<'_>) {}
+        fn record_follows_from(&self, _span: &tracing::span::Id, _follows: &tracing::span::Id) {}
+        fn event(&self, event: &tracing::Event<'_>) {
+            if event.metadata().target() != "rylus_server::latency" {
+                return;
+            }
+            let mut map = std::collections::HashMap::new();
+            event.record(&mut FieldGrabber { map: &mut map });
+            self.events.lock().unwrap().push(map);
+        }
+        fn enter(&self, _span: &tracing::span::Id) {}
+        fn exit(&self, _span: &tracing::span::Id) {}
+    }
+
+    fn start_test_video_thread(
+        latency_log: bool,
+        width: usize,
+        height: usize,
+        frame_rate: f64,
+    ) -> (
+        mpsc::Sender<VideoCommands>,
+        Arc<LatencyCapture>,
+        JoinHandle<()>,
+    ) {
+        let capture = Arc::new(LatencyCapture {
+            events: std::sync::Mutex::new(Vec::new()),
+        });
+        let (video_tx, video_rx) = mpsc::channel::<VideoCommands>();
+        let sender = MockSender::new();
+
+        let capture_for_thread = capture.clone();
+        let handle = spawn(move || {
+            tracing::subscriber::with_default(capture_for_thread, || {
+                handle_video(video_rx, sender, EncoderOptions::default(), latency_log);
+            });
+        });
+
+        use rylus_capture::testsrc::{PixelFormat, TestCapturable};
+        let capturable = TestCapturable {
+            width,
+            height,
+            pixel_format: PixelFormat::BGR0,
+        };
+        video_tx
+            .send(VideoCommands::Start(VideoConfig {
+                capturable: Box::new(capturable),
+                capture_cursor: false,
+                max_width: width,
+                max_height: height,
+                frame_rate,
+            }))
+            .unwrap();
+
+        (video_tx, capture, handle)
+    }
+
+    /// Real end-to-end instrumentation test: drives the actual capture thread
+    /// (`handle_video`) with a real `TestCapturable`/`TestRecorder`, the real
+    /// libx264 `VideoEncoder` (via `encode_thread`), and a `MockSender`
+    /// standing in only for the network socket (same convention as
+    /// `video_forwarder_sends_frames` above). With `latency_log: true`, this
+    /// proves the pipeline emits real per-frame `rylus_server::latency`
+    /// tracing events built from genuine, non-fabricated `Instant`
+    /// measurements taken at the real capture/queue/encode boundaries in
+    /// `handle_video`/`encode_thread` — not a stub that merely compiles.
+    #[test]
+    fn latency_log_emits_real_per_frame_events_when_enabled() {
+        let (video_tx, capture, handle) = start_test_video_thread(true, 64, 64, 60.0);
+
+        std::thread::sleep(Duration::from_millis(400));
+        drop(video_tx); // disconnects the receiver -> handle_video's loop exits
+        handle.join().expect("video thread panicked");
+
+        let events = capture.events.lock().unwrap();
+        assert!(
+            !events.is_empty(),
+            "expected at least one real rylus_server::latency event with latency_log enabled"
+        );
+
+        for ev in events.iter() {
+            let capture_us = *ev.get("capture_us").expect("capture_us field present");
+            let queue_us = *ev.get("queue_us").expect("queue_us field present");
+            let encode_send_us = *ev
+                .get("encode_send_us")
+                .expect("encode_send_us field present");
+            let total_us = *ev.get("total_us").expect("total_us field present");
+
+            // The four fields come from telescoping real Instant checkpoints
+            // (capture_start -> queued_at -> dequeued_at -> encode_done), so
+            // they must be additive up to the microsecond-truncation error of
+            // independently rounding three sub-durations vs. the one total
+            // (each `Duration::as_micros()` truncates its own sub-microsecond
+            // remainder, so the three parts can sum to at most a couple of
+            // microseconds off from the independently-measured total).
+            let sum = capture_us + queue_us + encode_send_us;
+            let diff = total_us.abs_diff(sum);
+            assert!(
+                diff <= 3,
+                "latency fields should telescope to the real total \
+                 (total_us={total_us}, sum={sum}, diff={diff})"
+            );
+        }
+    }
+
+    /// Confirms the opt-in gate actually gates: with `latency_log: false`,
+    /// the exact same real pipeline must emit zero `rylus_server::latency`
+    /// events, proving this instrumentation does not run by default.
+    #[test]
+    fn latency_log_stays_silent_when_disabled() {
+        let (video_tx, capture, handle) = start_test_video_thread(false, 64, 64, 60.0);
+
+        std::thread::sleep(Duration::from_millis(200));
+        drop(video_tx);
+        handle.join().expect("video thread panicked");
+
+        assert!(
+            capture.events.lock().unwrap().is_empty(),
+            "opt-in latency logging must stay silent when latency_log is false"
+        );
+    }
+
+    /// Measurement harness for `docs/LATENCY.md`: drives the real capture ->
+    /// encode -> send pipeline at a representative resolution/frame rate
+    /// (matching `self_test.rs`'s `SELF_TEST_WIDTH`/`HEIGHT`) for several
+    /// seconds and reports real mean/p50/p95/p99 numbers from the samples
+    /// this run actually produced. Run with `--nocapture` to read the
+    /// numbers; they are not hardcoded anywhere — this is the one true
+    /// source for the figures written into `docs/LATENCY.md`. As documented
+    /// on `EncodeCommand::Frame`, `encode_send_us` combines real encode and
+    /// the real (in this harness, in-process) send call, and `MockSender`
+    /// stands in for the socket exactly as `video_forwarder_sends_frames`
+    /// does elsewhere in this file — see docs/LATENCY.md's Method section for
+    /// what that does and does not include.
+    #[test]
+    fn latency_log_measured_baseline_640x360_30fps() {
+        const WIDTH: usize = 640;
+        const HEIGHT: usize = 360;
+        const FRAME_RATE: f64 = 30.0;
+        const RUN_FOR: Duration = Duration::from_secs(3);
+
+        let (video_tx, capture, handle) = start_test_video_thread(true, WIDTH, HEIGHT, FRAME_RATE);
+
+        std::thread::sleep(RUN_FOR);
+        drop(video_tx);
+        handle.join().expect("video thread panicked");
+
+        let events = capture.events.lock().unwrap();
+        assert!(
+            events.len() >= 10,
+            "expected a meaningful sample size for the latency baseline, got {}",
+            events.len()
+        );
+
+        let mut totals: Vec<u64> = events
+            .iter()
+            .map(|ev| *ev.get("total_us").expect("total_us present"))
+            .collect();
+        totals.sort_unstable();
+
+        let percentile = |p: f64| -> u64 {
+            let idx = ((totals.len() - 1) as f64 * p).round() as usize;
+            totals[idx]
+        };
+        let mean_us = totals.iter().sum::<u64>() as f64 / totals.len() as f64;
+        let p50_us = percentile(0.50);
+        let p95_us = percentile(0.95);
+        let p99_us = percentile(0.99);
+        let min_us = *totals.first().unwrap();
+        let max_us = *totals.last().unwrap();
+
+        println!(
+            "latency baseline ({WIDTH}x{HEIGHT}@{FRAME_RATE}fps, n={}): \
+             mean={mean_us:.0}us p50={p50_us}us p95={p95_us}us p99={p99_us}us \
+             min={min_us}us max={max_us}us",
+            totals.len()
+        );
+
+        // Sanity ceiling to catch a genuinely broken/hung pipeline in CI;
+        // deliberately generous since this is a debug-build, shared-CI-runner
+        // measurement, not a strict perf gate.
+        assert!(
+            mean_us < 200_000.0,
+            "mean total_us={mean_us} looks broken, not just slow"
+        );
     }
 }

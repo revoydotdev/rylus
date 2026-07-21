@@ -129,6 +129,7 @@ impl Rylus {
                 wayland_support: config.wayland_support,
                 #[cfg(feature = "gui")]
                 no_gui: config.no_gui,
+                latency_log: config.latency_log,
             },
             tls_config,
         );

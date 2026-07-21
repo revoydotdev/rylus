@@ -171,6 +171,14 @@ pub struct Config {
     #[arg(long, help = "Disable mDNS advertisement")]
     #[serde(default)]
     pub no_mdns: bool,
+    #[arg(
+        long,
+        help = "Opt-in: log per-frame capture->encode->send latency as structured \
+                tracing events (target 'rylus_server::latency'). Off by default; \
+                see docs/LATENCY.md."
+    )]
+    #[serde(default)]
+    pub latency_log: bool,
 }
 
 impl Config {
@@ -461,6 +469,18 @@ try_nvenc = false
     fn no_mdns_flag() {
         let config = Config::parse_from(["rylus", "--no-mdns"]);
         assert!(config.no_mdns);
+    }
+
+    #[test]
+    fn latency_log_defaults_false() {
+        let config = Config::parse_from::<_, &str>(["rylus"]);
+        assert!(!config.latency_log);
+    }
+
+    #[test]
+    fn latency_log_flag() {
+        let config = Config::parse_from(["rylus", "--latency-log"]);
+        assert!(config.latency_log);
     }
 
     #[test]
