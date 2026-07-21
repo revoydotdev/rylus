@@ -572,3 +572,4 @@ Scaffolded into the swarm by `enroll.py` (ADR-0028). Awaiting its first tick.
 - 2026-07-20T23:21:20Z — integrated `concern/gui-clippy-f32` into `integration` at `8dc5a49`
 - 2026-07-20T23:36:44Z — integrated `concern/fix-mdns-race` into `integration` at `40203ca`
 - 2026-07-20T23:37:49Z — integrated `concern/fix-selftest-test` into `integration` at `4989af3`
+- 2026-07-21T00:10:39Z — integrated `concern/origin-test` into `integration` at `eb7bec4`
