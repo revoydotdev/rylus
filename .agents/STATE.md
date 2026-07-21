@@ -601,3 +601,4 @@ since they'll keep tripping `preflight.sh` RECOVER otherwise.
 - 2026-07-21T00:12:02Z — integrated `concern/security-review-doc` into `integration` at `1ab1142`
 - 2026-07-21T00:12:23Z — integrated `concern/axe-a11y-wiring` into `integration` at `a60068b`
 - 2026-07-21T00:27:20Z — integrated `concern/cargo-audit-clean` into `integration` at `2ffc321`
+- 2026-07-21T00:35:51Z — integrated `concern/a11y-violations-fixed` into `integration` at `053b9a7`
