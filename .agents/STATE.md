@@ -7,7 +7,23 @@
 - MILESTONE_PHASE: AUDIT
 - CURRENT_MILESTONE: M2
 
-## 2026-07-20 tick — NORMAL: M2 candidate-complete — 3/3 concerns integrated, 9/9 remaining todos closed
+## 2026-07-21 tick — STOPPED at preflight: DIRTY tree, no audit run
+
+Preflight classified `DIRTY:2 files` — foreign uncommitted edits to the
+swarm harness itself: `.agents/daedalus/TICK_PROMPT.md` (+9/-5) and
+`.agents/dashboard/governance.py` (+105/-4). These are operator/infra
+work-in-progress, not project residue, so per STEP 2 the tick did NOT
+clobber, commit, or revert them and did NOT proceed to the pending M2 AUDIT.
+
+Recovery checks (safe, non-clobbering) all clean: no stale lock, no
+`concern/*` worktrees or branches, `integration` in sync with
+`origin/integration` (0/0) and 27 ahead of `origin/master` (expected). The
+three `.revoy/*` worktrees (`feat/pwa-a11y-wcag`, `ryl/a11y-audit`,
+`ryl/docs-1.0`) belong to the `/revoy` tool, not aswarm — left untouched.
+Governance: not paused, no directives, no unread. M2 AUDIT remains pending
+for the next tick once the tree is clean. Posted the block to governance.
+
+
 
 Self-heal pass on the 9 unclaimed M2 todos found 2 legitimate (real,
 non-vacuous evidence): `M2.P9.S1.T1` (3 real origin tests pass, not the
