@@ -6,7 +6,7 @@
     "watch": "esbuild ts/lib.ts --bundle --target=es2020 --outfile=www/static/lib.js --watch",
     "test": "vitest run",
     "test:watch": "vitest",
-    "a11y": "node scripts/a11y.mjs"
+    "a11y": "node scripts/a11y.mjs && node scripts/keyboard-nav.mjs"
   },
   "devDependencies": {
     "@vitest/coverage-v8": "^4.1.2",
