@@ -4,8 +4,9 @@
 // Boots a headless Chromium (via Playwright) against a throwaway local static
 // server, navigates it to each client route, injects the real axe-core
 // engine into the live page, and runs axe.run() against the actual DOM.
-// This is a genuine scan, not a canned report: violations found here are
-// real and are expected to be nonzero until M2.P3.S1.T2 fixes them.
+// This is a genuine scan, not a canned report. The process exits non-zero
+// if any route has 1+ violations, so this is a real CI/local gate — not
+// just a printout.
 //
 // Routes covered:
 //   /               -> www/templates/index.html (Handlebars template)
@@ -142,7 +143,11 @@ async function main() {
     }
 
     console.log(`\naxe-core audit complete: ${totalViolations} total violation group(s) across ${ROUTES.length} route(s).`);
-    console.log('(Fixing violations is tracked separately under M2.P3.S1.T2 — this script only audits and reports.)');
+
+    if (totalViolations > 0) {
+        console.error(`\naxe-core audit FAILED: ${totalViolations} violation group(s) found.`);
+        process.exitCode = 1;
+    }
 }
 
 main().catch((err) => {
