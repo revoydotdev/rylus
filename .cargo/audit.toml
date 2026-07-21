@@ -14,7 +14,7 @@
 #     codegen from bundled Wayland protocol XML, never runs against
 #     untrusted/network input)
 #
-# rylus is a LAN-only screen-mirroring tool (ADR-0001); this XML parsing is
+# rylus is a LAN-only screen-mirroring tool (ADR-0003); this XML parsing is
 # not exposed to the network/attacker-controlled input path the advisories
 # describe. Fixing requires quick-xml >=0.41.0, which is not reachable
 # without a major-version cascade across the whole egui/eframe/winit/
