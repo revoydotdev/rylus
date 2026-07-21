@@ -7,6 +7,21 @@
 - MILESTONE_PHASE: AUDIT
 - CURRENT_MILESTONE: M2
 
+## 2026-07-21 tick — SELF-PARK (4h): same DIRTY blocker, no new info
+
+Third consecutive tick blocked at preflight by `DIRTY:2` — the identical
+uncommitted operator WIP on harness files (`.agents/dashboard/governance.py`
++105/-4 A2A-bus API, `.agents/daedalus/TICK_PROMPT.md` +9/-5). No new
+information since the immediately-preceding (17:24) tick entry: recovery
+checks still clean (fresh lock, no `concern/*` worktrees/branches,
+`integration` 0/0 vs origin & 28 ahead of `origin/master`, `.revoy/*`
+worktrees are `/revoy`'s), governance not paused, 0 unread, block already
+posted twice (13:14, 17:24) so NOT re-posted. Zero workers, zero ledger
+progress, blocker is operator-only (commit/stash the A2A-bus WIP). Wrote
+`.agents/SELF_PARK` (4h) so the dispatch wrapper parks the project instead
+of re-burning ticks on an unchanged blocker. M2 AUDIT still pending; runs
+the first tick that sees a CLEAN tree.
+
 ## 2026-07-21 tick — STOPPED at preflight: DIRTY tree, no audit run
 
 Preflight classified `DIRTY:2 files` — foreign uncommitted edits to the
