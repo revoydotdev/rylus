@@ -31,9 +31,17 @@ worktrees off `integration`:
   403, absent Origin → 101. Verified `cargo test -p rylus-server origin` exit 0
   independently (3 passed) both pre- and post-integration, not just trusted
   the worker's self-report.
-- CLAIMED `M2.P1.S2.T1` (concern: `security-review-doc`) — write
-  `docs/SECURITY-REVIEW.md` from the real argon2/rate-limit/TLS/session/
-  control-frame/Origin code, not invented claims.
+- DONE — `M2.P1.S2.T1` (concern: `security-review-doc`) — integrated
+  `concern/security-review-doc` at `1ab1142` (ff-merge `f45d545`) — wrote
+  `docs/SECURITY-REVIEW.md` (6 sections: Origin, argon2, rate-limiting, TLS,
+  session tokens, control-frame caps), each cited to real source lines.
+  Spot-checked ~10 citations against the actual code myself before
+  integrating (argon2 0.5.3/rcgen 0.13.2 versions, `MAX_FAILED_ATTEMPTS=5`/
+  `RATE_LIMIT_WINDOW=60s`/`LOCKOUT_DURATION=30s`, session cookie
+  `HttpOnly`+`SameSite=Strict` w/ no `Secure`, TLS `Auto` mode's `/tmp/rylus`
+  unhardened-permissions gap, binary-frame-size-uncapped gap) — all matched.
+  Doc honestly documents 5 weak points rather than only listing strengths;
+  none of those are fixed this tick (out of scope), but worth future todos.
 - CLAIMED `M2.P3.S1.T1` (concern: `axe-a11y-wiring`) — wire a real axe-core
   audit runnable via `npm run a11y` over the web client routes.
 
