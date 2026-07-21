@@ -2,7 +2,7 @@
 <html lang="en">
 
 <head>
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <meta name="mobile-web-app-capable" content="yes">
@@ -22,12 +22,13 @@
 
 <body>
     <main id="main">
+        <h1 class="sr-only">Rylus screen mirror</h1>
         <video id="video" autoplay muted defaultMuted playsinline disablePictureInPicture aria-label="Screen mirror video"></video>
         <canvas id="canvas" class="vanish" aria-label="Drawing canvas"></canvas>
         <div id="debug_overlay" class="hide"></div>
         <div id="conn_quality" role="status" aria-live="polite" aria-label="Connection quality" title="Waiting for first heartbeat..."></div>
     </main>
-    <div id="settings">
+    <aside id="settings" aria-label="Settings">
         <div id="handle">⠿</div>
         <div id="settings_scroll">
             <h2>Settings</h2>
@@ -101,7 +102,7 @@
                 </label>
             </section>
         </div>
-    </div>
+    </aside>
 </body>
 
 </html>

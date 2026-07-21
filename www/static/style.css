@@ -10,6 +10,12 @@
 
     --rylus-accent: #00aaff;
     --rylus-accent-hover: #33bbff;
+    /* Darkened accent variants for contexts that need WCAG AA contrast the
+     * raw accent can't provide (#00aaff is 2.33:1 on light bg, 2.56:1 under
+     * white text — both fail AA). Same hue family, just less luminance. */
+    --rylus-accent-title: #0088cc;
+    --rylus-accent-strong: #0077b3;
+    --rylus-accent-strong-hover: #007ab8;
     --rylus-success: #22c55e;
     --rylus-warn: #f59e0b;
     --rylus-error: #ef4444;
@@ -66,6 +72,21 @@ html, body {
     font-weight: 400;
     line-height: 1.4;
     -webkit-font-smoothing: antialiased;
+}
+
+/* Visually hidden but screen-reader-accessible (standard sr-only technique).
+ * Used for headings required for a11y structure where a visible title
+ * doesn't fit the full-bleed video layout. */
+.sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
 }
 
 main {
@@ -653,7 +674,7 @@ body.auth-screen {
     font-weight: 700;
     font-size: 1.75rem;
     letter-spacing: -0.02em;
-    color: var(--rylus-accent);
+    color: var(--rylus-accent-title);
 }
 
 .auth-sub {
@@ -718,8 +739,8 @@ body.auth-screen {
     font: inherit;
     font-weight: 600;
     color: #ffffff;
-    background: var(--rylus-accent);
-    border: 1px solid var(--rylus-accent);
+    background: var(--rylus-accent-strong);
+    border: 1px solid var(--rylus-accent-strong);
     border-radius: var(--rylus-radius-sm);
     cursor: pointer;
     transition: background var(--rylus-transition), border-color var(--rylus-transition);
@@ -727,6 +748,6 @@ body.auth-screen {
 
 .auth-submit:hover,
 .auth-submit:focus-visible {
-    background: var(--rylus-accent-hover);
-    border-color: var(--rylus-accent-hover);
+    background: var(--rylus-accent-strong-hover);
+    border-color: var(--rylus-accent-strong-hover);
 }
