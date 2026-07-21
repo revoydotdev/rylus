@@ -171,3 +171,4 @@ Auto-reconnect with exponential backoff (1s, 2s, 4s, 8s, max 30s). Display: "Con
 | 2026-03-19 | Bottom sheet for tablet settings | Tablets are the primary device. Side drawer covers 25% of video. Bottom sheet is a well-understood mobile pattern. |
 | 2026-03-19 | Hero action layout for native client | Start/Stop is the #1 user action; it should be the #1 visual element. Settings grouped in collapsible sections below. |
 | 2026-03-19 | QR code on all platforms | FLTK limitation removed by egui migration. QR quick-connect is one of Rylus's best UX features. |
+| 2026-07-20 | Added `--rylus-accent-title`/`--rylus-accent-strong`/`-hover` (darkened #00aaff variants: #0088cc, #0077b3, #007ab8) | Raw `--rylus-accent` fails WCAG AA where axe-core flagged it (access-code screen title/submit button: 2.33:1 and 2.56:1). Same hue, lower luminance, scoped only to those two elements — the app-wide accent is unchanged. |
