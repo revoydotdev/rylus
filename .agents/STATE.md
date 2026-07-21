@@ -42,8 +42,17 @@ worktrees off `integration`:
   unhardened-permissions gap, binary-frame-size-uncapped gap) — all matched.
   Doc honestly documents 5 weak points rather than only listing strengths;
   none of those are fixed this tick (out of scope), but worth future todos.
-- CLAIMED `M2.P3.S1.T1` (concern: `axe-a11y-wiring`) — wire a real axe-core
-  audit runnable via `npm run a11y` over the web client routes.
+- DONE — `M2.P3.S1.T1` (concern: `axe-a11y-wiring`) — integrated
+  `concern/axe-a11y-wiring` at `a60068b` (ff-merge `14d5ff8`) — real
+  `scripts/a11y.mjs` builds the client bundle, serves the three static
+  routes (`/`, `/settings.html`, `/access_code.html`) from a throwaway local
+  HTTP server, drives headless Chromium via Playwright, injects real
+  `axe-core`, and runs `axe.run()`. Independently reran `npm install` +
+  `npm run a11y` on the integrated tree myself (not just trusted the
+  worker): genuinely executes, finds 7 real violation groups across the 3
+  routes (meta-viewport, missing h1/main landmarks, color-contrast,
+  unlandmarked regions) — fixing those is the separate `M2.P3.S1.T2` todo,
+  out of scope this tick.
 
 **Tooling gotcha found:** `scripts/integrate.sh`'s failure path does
 `git reset --hard "$PRE_REBASE_SHA"` on whatever branch is currently checked
