@@ -75,3 +75,52 @@ salvaging unlanded worker output needs deliberate review (diff each worktree,
 decide keep/discard/re-verify) that isn't part of the automated RECOVER path.
 **Next tick (or a human) must salvage these 3 before NORMAL work can resume**,
 since they'll keep tripping `preflight.sh` RECOVER otherwise.
+
+<!-- rotated  : 2 entries + 0 intlog lines -->
+## 2026-07-20 tick — RECOVER: salvage review performed, all 3 orphans landed
+
+3rd consecutive RECOVER on the same `concern/{self-test-routine,fmt-fix,bench-ci-gate}`
+orphans. Given the standing no-op for 2 prior ticks, did the deliberate salvage
+review the prior entries called for instead of re-confirming again: inspected
+each orphaned worktree's commit in isolation (`git show --stat`) and confirmed
+each touches only its own concern's files, not `.agents/STATE.md`/`ledger.jsonl`
+(the diff-vs-integration noise in those two files was purely base drift, not
+real changes) — safe to land. All 3 worktrees were clean (no uncommitted
+changes), so removed the worktree registrations (`git worktree remove`,
+branches preserved) and ran `scripts/integrate.sh` for each, gated on its real
+ROADMAP artifact command:
+- `concern/fmt-fix` → `764d89e` — gate `cargo fmt -- --check` — closes `M1.P9.S1.T3`
+- `concern/bench-ci-gate` → `afb88c2` — gate `grep -q bench .github/workflows/build.yml` — closes `M1.P3.S2.T1`
+- `concern/self-test-routine` → `281b4df` — gate `cargo run -q -p rylus-server -- --self-test` (real headless capture→encode→bind→accept run, exit 0) — closes `M1.P1.S1.T2`
+
+Recorded all 3 via `ledger.py done --run` (each re-verified the real command
+during recording, not trusted from the integrate gate alone). Deleted the 3
+now-merged `concern/*` branches. `ledger.py check --rerun` → PASS (10/10 done
+todos, structural+rerun). `preflight.sh` and `worktree-check.sh` both clean —
+no more salvage blocker. M1 now 10/15 todos done; 5 remain for a future NORMAL
+tick.
+
+## 2026-07-20 tick — RECOVER (2nd consecutive tick, unchanged): salvage still blocking
+
+`preflight.sh` → `RECOVER:concern-worktrees;concern-branches` again, identical
+to the prior tick — same 3 `concern/{self-test-routine,fmt-fix,bench-ci-gate}`
+worktrees/branches, still orphaned-unlanded/unmerged, still SALVAGE-first.
+Nothing new for automated recovery to act on. Re-verified rather than assumed:
+`ledger.py check --rerun` → PASS (7/7 done todos, real cargo runs incl. the
+encode bench and protocol_version test); `master` still an ancestor of
+`integration` (no reconciliation needed); `integration` is even with
+`origin/integration` (0 ahead/0 behind — nothing to push). No stale lock to
+clear (this tick's `RUN.lock` was freshly created at start, prior one had
+already been cleared and removed last tick).
+
+Per HARD INVARIANTS and this tick's explicit RECOVER contract, still did not
+touch the 3 worktrees — deliberate salvage (diff each, decide keep/discard/
+re-verify) is out of scope for the automated RECOVER path and risks
+discarding unverified worker output without review. **This is now 2 ticks in
+a row with zero NORMAL-phase progress on M1** (12/15 todos still remaining)
+because these orphans keep tripping `preflight.sh`. Flagging with higher
+urgency: an operator (or a tick explicitly scoped to salvage review) needs to
+open each worktree, check whether the worker's diff is sound, and either land
+it via a fresh `concern/*` branch + `integrate.sh` or discard it, then
+`git worktree remove` + `git branch -d` to clear the residue. Until that
+happens, every subsequent tick will just repeat this same no-op RECOVER.

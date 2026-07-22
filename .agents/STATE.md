@@ -4,8 +4,40 @@
 > Status keys: CLAIMED · IN_PROGRESS · DONE · BLOCKED · GATE-FAILED
 
 <!-- CONTROL: machine-read; supervisor updates these two lines -->
-- MILESTONE_PHASE: AUDIT
-- CURRENT_MILESTONE: M2
+- MILESTONE_PHASE: NORMAL
+- CURRENT_MILESTONE: M3
+
+## 2026-07-22 tick — M2 AUDIT PASS → master promoted, advance to M3 NORMAL
+
+First CLEAN tree since the DIRTY blocker cleared (operator A2A-bus WIP is now
+committed as `61af215`). Ran the sole-turn M2 audit — no workers. All five
+gates re-verified with fresh runs THIS tick:
+
+- **M2G1** origin test — `cargo test -p rylus-server origin`: 3 passed
+  (`ws_upgrade_foreign_origin_rejected`, `_absent_origin_accepted`,
+  `_same_origin_accepted`), exit 0.
+- **M2G2** `docs/SECURITY-REVIEW.md` exists + `argon2` present.
+- **M2G3** `docs/LATENCY.md` exists — substantive (server capture→encode→send
+  p95 = 792 µs, honestly scoped vs the AX-1 ~7 ms ceiling, method + repro).
+- **M2G4** `cargo audit`: exit 0; two `quick-xml` advisories narrowly
+  allow-listed in `.cargo/audit.toml` with justified GUI-only-path rationale
+  (M2.P1.S2.T2).
+- **M2G5** `npm run a11y`: 0 axe violations across `/`, `/settings.html`,
+  `/access_code.html`; keyboard-only settings-panel check all PASS.
+- `ledger.py check --rerun`: PASS (28 done todos, structural+rerun).
+
+Axioms AX-1 (latency measured, not asserted) and AX-6 (secure-by-default,
+Origin proven wired by test) satisfied. Verified the roadmap prose
+"foreign/absent Origin is rejected" is loose but NOT a drift: the
+implemented+tested+documented behavior (foreign rejected, absent accepted for
+non-browser clients) is a deliberate, source-cited CSWSH-defense decision in
+SECURITY-REVIEW.md §1 — coherent, not an oversight.
+
+**Promotion:** master is aswarm-owned (tip was the M1 promotion commit), not
+checked out in any worktree, in sync with origin, and a clean ancestor of
+integration. Fast-forwarded master `3196d05..61af215` and pushed; also pushed
+integration `939143a..61af215`. Both branches 0/0 vs origin. Advanced CONTROL
+to `M3 NORMAL`.
 
 ## 2026-07-21 tick — SELF-PARK (4h): same DIRTY blocker, no new info
 
@@ -643,54 +675,6 @@ structural+rerun) — **M1 is 15/15 todos done**. Explicitly re-verified all
 all gates green → M1 candidate-complete. Flipping `MILESTONE_PHASE` to
 `AUDIT` per protocol; **not** auditing this tick — that's the next tick's
 sole job.
-
-## 2026-07-20 tick — RECOVER: salvage review performed, all 3 orphans landed
-
-3rd consecutive RECOVER on the same `concern/{self-test-routine,fmt-fix,bench-ci-gate}`
-orphans. Given the standing no-op for 2 prior ticks, did the deliberate salvage
-review the prior entries called for instead of re-confirming again: inspected
-each orphaned worktree's commit in isolation (`git show --stat`) and confirmed
-each touches only its own concern's files, not `.agents/STATE.md`/`ledger.jsonl`
-(the diff-vs-integration noise in those two files was purely base drift, not
-real changes) — safe to land. All 3 worktrees were clean (no uncommitted
-changes), so removed the worktree registrations (`git worktree remove`,
-branches preserved) and ran `scripts/integrate.sh` for each, gated on its real
-ROADMAP artifact command:
-- `concern/fmt-fix` → `764d89e` — gate `cargo fmt -- --check` — closes `M1.P9.S1.T3`
-- `concern/bench-ci-gate` → `afb88c2` — gate `grep -q bench .github/workflows/build.yml` — closes `M1.P3.S2.T1`
-- `concern/self-test-routine` → `281b4df` — gate `cargo run -q -p rylus-server -- --self-test` (real headless capture→encode→bind→accept run, exit 0) — closes `M1.P1.S1.T2`
-
-Recorded all 3 via `ledger.py done --run` (each re-verified the real command
-during recording, not trusted from the integrate gate alone). Deleted the 3
-now-merged `concern/*` branches. `ledger.py check --rerun` → PASS (10/10 done
-todos, structural+rerun). `preflight.sh` and `worktree-check.sh` both clean —
-no more salvage blocker. M1 now 10/15 todos done; 5 remain for a future NORMAL
-tick.
-
-## 2026-07-20 tick — RECOVER (2nd consecutive tick, unchanged): salvage still blocking
-
-`preflight.sh` → `RECOVER:concern-worktrees;concern-branches` again, identical
-to the prior tick — same 3 `concern/{self-test-routine,fmt-fix,bench-ci-gate}`
-worktrees/branches, still orphaned-unlanded/unmerged, still SALVAGE-first.
-Nothing new for automated recovery to act on. Re-verified rather than assumed:
-`ledger.py check --rerun` → PASS (7/7 done todos, real cargo runs incl. the
-encode bench and protocol_version test); `master` still an ancestor of
-`integration` (no reconciliation needed); `integration` is even with
-`origin/integration` (0 ahead/0 behind — nothing to push). No stale lock to
-clear (this tick's `RUN.lock` was freshly created at start, prior one had
-already been cleared and removed last tick).
-
-Per HARD INVARIANTS and this tick's explicit RECOVER contract, still did not
-touch the 3 worktrees — deliberate salvage (diff each, decide keep/discard/
-re-verify) is out of scope for the automated RECOVER path and risks
-discarding unverified worker output without review. **This is now 2 ticks in
-a row with zero NORMAL-phase progress on M1** (12/15 todos still remaining)
-because these orphans keep tripping `preflight.sh`. Flagging with higher
-urgency: an operator (or a tick explicitly scoped to salvage review) needs to
-open each worktree, check whether the worker's diff is sound, and either land
-it via a fresh `concern/*` branch + `integrate.sh` or discard it, then
-`git worktree remove` + `git branch -d` to clear the residue. Until that
-happens, every subsequent tick will just repeat this same no-op RECOVER.
 
 - 2026-07-20T22:35:30Z — integrated `concern/self-test-flag` into `integration` at `024080e`
 - 2026-07-20T22:37:52Z — integrated `concern/protocol-doc` into `integration` at `f498d1c`
