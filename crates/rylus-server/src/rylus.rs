@@ -65,10 +65,21 @@ impl Rylus {
                 None
             }
             TlsMode::Auto => {
-                let cert_dir = std::path::PathBuf::from("/tmp").join("rylus");
+                // Store cert/key under the per-user XDG state dir
+                // (~/.local/state/rylus), falling back to the XDG config dir
+                // (~/.config/rylus) when state_dir() is unavailable (e.g.
+                // non-XDG platforms). Both are private to the current user,
+                // unlike the former /tmp/rylus which was world-readable.
+                let cert_dir = dirs::state_dir()
+                    .or_else(dirs::config_dir)
+                    .unwrap_or_else(|| std::path::PathBuf::from("."))
+                    .join("rylus");
+                // v2 filenames: v1 certs lacked SANs (unusable for iOS trust)
+                // and had a 4096-expiry Apple rejects; regenerate rather than
+                // load a stale pair.
                 match crate::tls::load_or_generate_cert(
-                    &cert_dir.join("cert.der"),
-                    &cert_dir.join("key.der"),
+                    &cert_dir.join("cert-v2.der"),
+                    &cert_dir.join("key-v2.der"),
                 ) {
                     Ok(cfg) => Some(cfg),
                     Err(err) => {
@@ -112,23 +123,11 @@ impl Rylus {
                 config.custom_access_html.clone(),
                 config.custom_style_css.clone(),
                 config.custom_lib_js.clone(),
-                {
-                    #[cfg(target_os = "linux")]
-                    {
-                        config.wayland_support
-                    }
-                    #[cfg(not(target_os = "linux"))]
-                    {
-                        false
-                    }
-                },
             ),
             RylusClientConfig {
                 encoder_options,
                 #[cfg(target_os = "linux")]
                 wayland_support: config.wayland_support,
-                #[cfg(feature = "gui")]
-                no_gui: config.no_gui,
                 latency_log: config.latency_log,
             },
             tls_config,

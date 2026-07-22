@@ -153,12 +153,15 @@ test at `config.rs:423-427`).
   client pins the original. This is an accepted trade-off for a
   self-hosted/LAN tool, but it is not the same security property as a
   CA-issued cert.
-- The `Auto` mode's cert/key live under `/tmp/rylus/`, a world-readable
-  temp directory on multi-user systems, and are written with
-  `std::fs::write` without tightening permissions — on a shared machine
-  another local user could potentially read the private key. `/tmp` is also
-  typically cleared on reboot, so `Auto` regenerates on every reboot even
-  though the code otherwise treats "file exists" as "reuse it."
+- **Fixed since the original review:** the `Auto` mode's cert/key no longer
+  live under `/tmp/rylus/`. `crate::rylus::Rylus::start` now resolves a
+  per-user XDG state dir (`dirs::state_dir()`, falling back to
+  `dirs::config_dir()`) and `tls.rs::load_or_generate_cert` creates that
+  directory `0700` and writes the key file `0600`
+  (`crates/rylus-server/src/tls.rs`), so the key is no longer world-readable
+  or wiped on every reboot. `generate_self_signed_cert` also now sets SANs
+  (hostname, `<hostname>.local`, `localhost`, every local IP) and a 2-year
+  validity window, fixing the earlier "no SAN" trust gap on iOS/Safari.
 - `Disabled` mode is silently accepted as a valid configuration (only a log
   warning, no hard refusal), and the default bind address is `0.0.0.0`
   (`crates/rylus-core/src/config.rs:280`), i.e. all interfaces — so a
@@ -197,20 +200,14 @@ active session so all previously-authenticated clients must re-enter the new
 code (`web.rs:744-745`, comment confirms this is intentional).
 
 **Observations:**
-- No cookie `Secure` attribute is set. On the `Disabled` TLS mode this is
-  moot (everything is cleartext anyway), but even under TLS the cookie
-  lacks `Secure`, so if the app is ever also reachable over plain HTTP on
-  the same host/port (e.g. a future dual-listener) the session cookie could
-  be sent in cleartext. Currently the server only listens on one accepted
-  socket type at a time per the `TlsOrTcpStream` design, so this is latent
-  rather than exploitable today, but it's worth flagging.
-  - **Correction to be precise**: I did not find any HTTP↔HTTPS
-    upgrade/redirect logic in `web.rs`; the server binds one listener and
-    that listener is either fully TLS or fully plain TCP based on
-    `tls_config` being `Some`/`None` at `run_server` startup
-    (`web.rs:920-934`). So `Secure`'s absence is currently inert given the
-    single-listener design, not a live gap — but adding a second listener
-    later without adding `Secure` would reintroduce it.
+- **Fixed since the original review:** the session cookie now carries
+  `Secure` whenever the listener is actually TLS. The `Set-Cookie` header is
+  built as `HttpOnly; SameSite=Strict; Path=/; Max-Age=86400` plus a
+  conditional `; Secure` suffix gated on `context.secure_cookies`
+  (`crates/rylus-server/src/web.rs`), which `run_server` derives from
+  whether `tls_config` is `Some` — so plaintext `Disabled`-mode deployments
+  don't get a `Secure` cookie they could never actually satisfy, while every
+  TLS-enabled deployment does.
 - Tokens are never individually revocable — there's no per-session logout
   or token list; rotation via `clear()` is all-or-nothing.
 - No rate limiting exists on session-token *guessing* the way there is on
@@ -223,55 +220,58 @@ code (`web.rs:744-745`, comment confirms this is intentional).
 ## 6. Control-frame size caps (WebSocket transport)
 
 **What's implemented:** `crates/rylus-transport/src/websocket.rs` defines
-`MAX_TEXT_FRAME_SIZE: usize = 64 * 1024` (64 KB, `websocket.rs:19-21`),
-documented in-line as applying to "control messages" (text frames). In the
-read loop, any incoming `Message::Text` frame whose length exceeds
-`MAX_TEXT_FRAME_SIZE` is logged with `warn!` and dropped via `continue`
-(does not close the connection, just discards that one message)
-(`websocket.rs:191-198`). `Message::Binary` frames — used for video — are
-explicitly **not** size-checked: the match arm at `websocket.rs:208`
-(`Message::Binary(_) | Message::Ping(_) | Message::Pong(_) | Message::Frame(_)
-=> {}`) does nothing with binary payload size at all, and the doc comment at
-`websocket.rs:20` states this plainly: "Binary frames (video) are not
-limited."
+`MAX_TEXT_FRAME_SIZE: usize = 64 * 1024` (64 KB). **Fixed since the original
+review:** this cap is now enforced at the protocol level, not just against
+text frames after the fact. `rylus_websocket_channel_from_hyper_upgrade`
+builds the `WebSocketStream` with a `WebSocketConfig` whose
+`max_message_size` and `max_frame_size` are both set to
+`MAX_TEXT_FRAME_SIZE`, so tungstenite itself rejects an oversized frame of
+*any* type (binary included) during reassembly, before it ever reaches the
+read loop's `match`. The read loop's own `Message::Text` length check is
+now a second, redundant guard rather than the only one.
 
-Related but distinct caps in the same file: `CHANNEL_BUFFER_SIZE = 32`
-(`websocket.rs:29-31`, the internal mpsc channel depth for control messages,
-providing backpressure) and `VIDEO_QUEUE_CAPACITY = 4`
-(`websocket.rs:33-36`, a drop-oldest ring buffer for outbound video frames —
-this bounds *queued* frame count for outbound video, not inbound frame
-*size*).
+Related but distinct caps in the same file: `CHANNEL_BUFFER_SIZE = 32` (the
+internal mpsc channel depth for control messages, providing backpressure)
+and `VIDEO_QUEUE_CAPACITY = 4` (a drop-oldest ring buffer for outbound video
+frames — this bounds *queued* frame count for outbound video, not inbound
+frame *size*).
 
-**Why:** Capping text-frame size defends the JSON control-message parser
-(`serde_json::from_str`, `websocket.rs:199`) against a malicious or buggy
-client sending an oversized text payload to exhaust memory or CPU on
-parsing; dropping rather than closing the connection tolerates a one-off
-oversized frame without tearing down an otherwise-good session.
-
-**Gap, stated honestly:** There is no cap on inbound binary frame size.
-Since this server only accepts binary frames from clients incidentally
-(the current protocol direction sends video server→client as binary,
-per `Message::Binary` in the write loop at `websocket.rs:224`) the practical
-exposure depends on whether the client→server direction ever sends binary
-frames; regardless, the receive loop's `Message::Binary(_) => {}` branch
-would accept an arbitrarily large binary frame from any authenticated,
-Origin-checked peer with no size limit at the transport layer before it
-even reaches application logic. This is a real, unmitigated gap — not just
-a theoretical one — and should be considered for a future todo (e.g. a
-`MAX_BINARY_FRAME_SIZE` cap mirroring the text-frame one, or relying on
-tokio-tungstenite's own frame-size limits if configured, which this code
-does not currently set via `WebSocketStream::from_raw_socket`'s `None`
-config argument at `websocket.rs:148-152`).
+**Why:** Capping frame size at the protocol layer defends against a
+malicious or buggy client sending an oversized frame (of either message
+type) to exhaust memory or CPU on reassembly/parsing, and does so before a
+single byte reaches application logic — a stronger property than an
+app-level length check on an already-fully-buffered message.
 
 ## Summary of the honest weak points found
 
-- No cap on inbound binary WebSocket frame size (§6) — the most concrete gap.
-- `Auto` TLS mode persists an unhardened private key under world-readable
-  `/tmp/rylus/` (§4).
 - Rate limiting is per-source-IP with in-memory-only state, so it's
   NAT-blind and doesn't survive a restart (§3).
-- Session cookie has no `Secure` attribute, currently inert only because the
-  server never runs a mixed HTTP+HTTPS listener (§5).
 - `Disabled` TLS mode is accepted with only a warning log, and the default
   bind address is `0.0.0.0`, so a misconfigured deployment is
   LAN-cleartext-reachable rather than localhost-only (§4).
+- Tokens are never individually revocable, and session-token guessing isn't
+  rate-limited the way the access-code POST is (§5) — not practically
+  exploitable given 165 bits of entropy, but structurally worth naming.
+
+## Addendum: audit-remediation pass findings (assimilated from `chore/ship-prep`)
+
+A separate, findings-oriented audit pass (commits `e5a1f8e`, `043ba61`,
+`97dff4a`, `33b2112`) fixed several items this review originally flagged as
+open — folded into §3–§6 above with a "Fixed since the original review"
+note each. Two items from that pass remain genuinely open and were not
+remediated by this merge:
+
+- **Unbounded rate-limiter map.** `RateLimiter::attempts`
+  (`crates/rylus-server/src/web.rs`) is a `Mutex<HashMap<IpAddr, Vec<Instant>>>`
+  with no eviction of IP entries themselves — `lockout_remaining` prunes each
+  IP's *timestamp* vector via `retain`, but never removes an IP key once
+  created. A long-running server contacted by many distinct IPs (e.g. an
+  internet-facing misconfiguration, or a scan) grows this map without bound.
+  Low severity (memory growth, not a crash or auth bypass) but genuinely
+  unfixed.
+- **Stale legacy TLS script.** `rylus_tls.sh` still ships at the repo root,
+  unreferenced by any code, build, or CI file — only `docs/SECURITY-REVIEW.md`
+  and `docs/ARCHITECTURE.md` mention it. It predates the native
+  `rylus-server` TLS implementation (`tls.rs`) and should be removed or
+  clearly marked historical to avoid an operator running the wrong TLS setup
+  path.

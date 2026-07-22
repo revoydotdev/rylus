@@ -1,6 +1,8 @@
 # Rylus
 
-![Build](https://github.com/revelri/Rylus/workflows/Build/badge.svg)
+[![Build](https://github.com/Chorosyne/rylus/actions/workflows/build.yml/badge.svg)](https://github.com/Chorosyne/rylus/actions/workflows/build.yml)
+[![License: AGPL-3.0-or-later](https://img.shields.io/badge/license-AGPL--3.0--or--later-blue.svg)](LICENSE)
+[![Rust](https://img.shields.io/badge/rust-2021--edition-orange.svg)](https://www.rust-lang.org/)
 
 **Turn a tablet or smartphone into a graphic tablet and touch screen for your computer — using only a browser.**
 
@@ -53,7 +55,7 @@ Rylus exposes an HTTP and WebSocket service on your local network. The following
 - **Authentication transport:** Access codes moved from GET query parameters to POST request body — codes no longer appear in URLs, server logs, or browser history.
 - **Session management:** Authenticated sessions use HttpOnly, SameSite=Strict cookies.
 - **Rate limiting:** 5 failed authentication attempts per 60-second window triggers a 30-second lockout per IP.
-- **WebSocket limits:** 64KB text frame maximum to prevent OOM from oversized control messages. 60-second idle timeout closes zombie connections, freeing video, encode, and input device resources.
+- **WebSocket limits:** 64KB text frame maximum to prevent OOM from oversized control messages. 120-second idle timeout closes zombie connections, freeing video, encode, and input device resources.
 
 ### Reliability and Error Recovery
 
@@ -69,7 +71,7 @@ Real-world capture pipelines fail — hardware goes to sleep, compositors revoke
 
 ### Developer Experience
 
-- **Test suite:** 97 tests covering protocol serialization, config parsing, pixel formats, access code authentication, rate limiting, and session tokens.
+- **Test suite:** 200+ tests across Rust and TypeScript covering protocol serialization, config parsing, pixel formats, access code authentication, rate limiting, session tokens, encoder buffer validation, and client reconnect logic.
 - **CI quality gates:** clippy, rustfmt, and cargo-audit run before builds.
 - **Structured logging:** The `tracing` crate with optional JSON output (`RYLUS_LOG_JSON=true`). Configurable log levels via `RYLUS_LOG_LEVEL`.
 - **Frontend build:** esbuild replaces tsc for TypeScript compilation, with proper `rerun-if-changed` integration in build.rs.
@@ -109,7 +111,7 @@ The above features are available on all operating systems. Additional features o
 
 ## Installation
 
-Download the latest release for your OS from the [releases page](https://github.com/revelri/Rylus/releases). No apps are needed on your tablet — just a modern browser (Firefox 80+, Safari on iOS/iPadOS 13+).
+Download the latest release for your OS from the [releases page](https://github.com/Chorosyne/rylus/releases). No apps are needed on your tablet — just a modern browser (Firefox 80+, Safari on iOS/iPadOS 13+).
 
 **Arch Linux:** install from the AUR:
 
@@ -126,15 +128,14 @@ Both packages install a `rylus.service` user unit; `systemctl --user enable --no
 
 Start Rylus, optionally set an access code in the settings panel, and press Start. This launches a webserver on your computer. Open `http://<your computer's address>:<port, default 1701>` in a browser on your tablet. Rylus displays the URL and a QR code you can scan.
 
-If you have a firewall, open TCP ports for the webserver (1701 by default) and the WebSocket connection (9001 by default).
+If you have a firewall, open TCP port 1701 (or whichever port you configured with `--web-port`). The WebSocket stream is served at `/ws` on the same port — no separate port is needed.
 
 On many Linux distributions this is done with ufw:
 ```
 sudo ufw allow 1701/tcp
-sudo ufw allow 9001/tcp
 ```
 
-Rylus supports access code authentication (hashed with argon2, rate-limited) but does not use TLS by default. Only run on networks you trust, or set up a TLS proxy (see [Encryption](#encryption)).
+Rylus supports access code authentication (hashed with argon2, rate-limited) and enables TLS by default (auto mode generates a self-signed certificate on first run). To disable TLS, pass `--tls-mode disabled`; to use a certificate authority-signed certificate, pass `--tls-mode certified` together with `--tls-cert-path` and `--tls-key-path`.
 
 ### Fullscreen
 
@@ -146,7 +147,27 @@ Rylus supports keyboard input for physical keyboards. Connect a Bluetooth keyboa
 
 ### Headless Mode
 
-Rylus provides a command-line interface. `--no-gui` starts Rylus in headless mode, suitable for automation and remote servers. For all options see `rylus --help`.
+Rylus provides a command-line interface. `--no-gui` starts Rylus in headless mode, suitable for automation and remote servers.
+
+Minimal headless invocation (starts immediately on port 1701 with TLS auto-enabled):
+
+```sh
+rylus --no-gui
+```
+
+With an access code and explicit TLS mode:
+
+```sh
+rylus --no-gui --access-code mysecret --web-port 1701 --tls-mode auto
+```
+
+To disable TLS (e.g. when terminating TLS at a reverse proxy):
+
+```sh
+rylus --no-gui --tls-mode disabled
+```
+
+For all options, run `rylus --help`.
 
 Configuration is stored in `~/.config/rylus/rylus.toml`.
 
@@ -258,11 +279,21 @@ The following are less tested — contributions to expand this documentation are
 
 #### Encryption
 
-Rylus does not include TLS by default. If you are running on an untrusted network, set up a TLS proxy. One option is [hitch](https://hitch-tls.org/) — an example setup script is included at [`rylus_tls.sh`](rylus_tls.sh).
+Rylus enables TLS by default (`--tls-mode auto`): a self-signed certificate is generated on first run and reused on subsequent starts. Your browser will warn that the certificate is untrusted — this is expected for a self-signed certificate and can be accepted.
 
-The script creates a self-signed certificate. Your browser will warn that the certificate is untrusted — this is expected for self-signed certificates and can be accepted.
+To use a CA-signed certificate instead (no browser warning):
 
-Note for Firefox users: a [known bug](https://bugzilla.mozilla.org/show_bug.cgi?id=1187666) prevents accepting self-signed certificates for WebSocket connections. As a workaround, open the WebSocket URL directly in the address bar to accept the certificate first.
+```sh
+rylus --tls-mode certified --tls-cert-path /path/to/cert.pem --tls-key-path /path/to/key.pem
+```
+
+To run without TLS (e.g. behind a reverse proxy that handles it):
+
+```sh
+rylus --tls-mode disabled
+```
+
+Note for Firefox users: a [known bug](https://bugzilla.mozilla.org/show_bug.cgi?id=1187666) prevents accepting self-signed certificates for WebSocket connections when the TLS warning is shown. As a workaround, visit the Rylus URL directly in the address bar first and accept the certificate, then reload the page normally.
 
 ### macOS
 
@@ -325,14 +356,14 @@ A Dockerfile for building the Linux version is located at [docker/Dockerfile](do
 ```sh
 docker build -t rylus-build docker/
 docker run -it rylus-build bash
-root@container:/# git clone https://github.com/revelri/Rylus
-root@container:/# cd Rylus/
-root@container:/Rylus# cargo build --release
+root@container:/# git clone https://github.com/Chorosyne/rylus
+root@container:/# cd rylus/
+root@container:/rylus# cargo build --release
 ```
 
 Copy the binary out of the container:
 ```sh
-docker cp <container-id>:/Rylus/target/release/rylus ~/rylus
+docker cp <container-id>:/rylus/target/release/rylus ~/rylus
 ```
 
 To build a .deb package, install `cargo-deb` inside the container and run `cargo deb`.
@@ -358,13 +389,13 @@ Captured frames are encoded to an H.264 video stream using FFmpeg (linked via ff
 ## FAQ
 
 **Q: The page does not load on my tablet / I get a timeout.**
-A: A firewall is likely blocking the connection. Make sure both ports Rylus uses are open (default: 1701 for HTTP, 9001 for WebSocket).
+A: A firewall is likely blocking the connection. Open port 1701 (or whichever port you configured with `--web-port`). The WebSocket stream is served on the same port.
 
 **Q: I get `ERROR Failed to create uinput device: CError: code...`**
 A: uinput is probably misconfigured. Verify you followed all [setup steps](#linux) and logged out and back in. Very old kernels may not support the required features — upgrade your system if needed.
 
 **Q: The "Capture" dropdown is empty and the screen is not mirrored.**
-A: Check that both the HTTP port and the WebSocket port are open in your firewall. If only one is open, the web client connects but cannot receive the video stream.
+A: Check that port 1701 (or your `--web-port`) is open in your firewall. The WebSocket stream is served on the same port as the HTTP interface.
 
 **Q: I can only see the whole screen in the "Capture" dropdown, not individual windows.**
 A: On macOS and Windows, per-window capture is not implemented. On Linux, your window manager may not support [Extended Window Manager Hints](https://specifications.freedesktop.org/wm-spec/latest/) or you may need to enable them (e.g. in XMonad).
@@ -388,9 +419,8 @@ A: Yes. Options include:
 - On Android, use ADB port forwarding:
   ```console
   adb reverse tcp:1701 tcp:1701
-  adb reverse tcp:9001 tcp:9001
   ```
-  Then connect from your Android device to `http://127.0.0.1:1701`.
+  Then connect from your Android device to `http://127.0.0.1:1701` (or `https://` if TLS is enabled).
 
 Rylus only requires IP connectivity between the two devices — WiFi is one option among several.
 

@@ -4197,11 +4197,13 @@ dependencies = [
  "clap",
  "clap_complete",
  "clap_mangen",
+ "dirs",
  "handlebars",
  "hostname",
  "http-body-util",
  "hyper",
  "hyper-util",
+ "if-addrs",
  "mdns-sd",
  "parking_lot",
  "pipewire",
@@ -4217,6 +4219,7 @@ dependencies = [
  "serde",
  "serde_json",
  "signal-hook",
+ "time",
  "tokio",
  "tokio-rustls",
  "tracing",
@@ -4228,7 +4231,6 @@ dependencies = [
 name = "rylus-transport"
 version = "0.17.0"
 dependencies = [
- "flate2",
  "futures-util",
  "hyper",
  "hyper-util",

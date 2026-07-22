@@ -16,27 +16,6 @@ export function getQualityIndicatorColor(quality: ConnectionQuality): string {
     }
 }
 
-// 5.4: RTT measurement via Heartbeat echo
-
-export interface RttTracker {
-    sendHeartbeat: () => void;
-    getRtt: () => number | null;
-    reset: () => void;
-}
-
-export function createRttTracker(): RttTracker {
-    let lastHeartbeatTime: number | null = null;
-    let currentRtt: number | null = null;
-    const tracker: RttTracker & { lastHeartbeatTime: number | null; currentRtt: number | null } = {
-        lastHeartbeatTime,
-        currentRtt,
-        sendHeartbeat: () => { tracker.lastHeartbeatTime = Date.now(); },
-        getRtt: () => tracker.currentRtt,
-        reset: () => { tracker.lastHeartbeatTime = null; tracker.currentRtt = null; },
-    };
-    return tracker;
-}
-
 // 5.1: Onboarding wizard
 
 export function shouldShowOnboarding(): boolean {
@@ -142,28 +121,6 @@ export function showToast(message: string, type: 'error' | 'info' | 'success' = 
     }, duration);
 }
 
-// 5.3: Tab navigation
-
-export type TabId = 'capture' | 'video' | 'input' | 'display';
-
-export function switchTab(tabId: TabId): void {
-    document.querySelectorAll('.rylus-tab-panel').forEach((panel) => {
-        panel.classList.toggle('hide', panel.id !== `rylus-tab-panel-${tabId}`);
-    });
-    document.querySelectorAll('[data-rylus-tab]').forEach((btn) => {
-        btn.classList.toggle('active', btn.getAttribute('data-rylus-tab') === tabId);
-    });
-}
-
-export function initTabNavigation(): void {
-    document.querySelectorAll('[data-rylus-tab]').forEach((btn) => {
-        btn.addEventListener('click', () => {
-            const tabId = btn.getAttribute('data-rylus-tab') as TabId;
-            if (tabId) switchTab(tabId);
-        });
-    });
-}
-
 // 3.1: Pressure curve customization
 
 export type PressurePreset = 'linear' | 'soft' | 'firm';
@@ -198,36 +155,5 @@ export function createPalmRejector(suppressionMs: number = 100): {
     return {
         onPenEvent: () => { lastPenEventTime = Date.now(); },
         shouldRejectTouch: () => Date.now() - lastPenEventTime < suppressionMs,
-    };
-}
-
-// 3.6: Batched pointer events
-
-export function createPointerEventBatcher(sendFn: (data: string) => void): {
-    add: (event: any) => void;
-    flush: () => void;
-} {
-    let batch: any[] = [];
-    let timer: number | null = null;
-    return {
-        add: (event: any) => {
-            batch.push(event);
-            if (!timer) {
-                timer = window.setTimeout(() => {
-                    if (batch.length > 0) {
-                        sendFn(JSON.stringify({ PointerEvents: batch }));
-                        batch = [];
-                    }
-                    timer = null;
-                }, 16);
-            }
-        },
-        flush: () => {
-            if (timer !== null) { clearTimeout(timer); timer = null; }
-            if (batch.length > 0) {
-                sendFn(JSON.stringify({ PointerEvents: batch }));
-                batch = [];
-            }
-        }
     };
 }

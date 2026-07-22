@@ -16,8 +16,11 @@ use tracing::warn;
 
 use rylus_core::protocol::{MessageInbound, MessageOutbound, RylusReceiver, RylusSender};
 
-/// Maximum size of a text WebSocket frame (control messages).
-/// Binary frames (video) are not limited.
+/// Maximum size of a text WebSocket frame (control messages). Also installed
+/// as the connection's protocol-level `max_message_size`/`max_frame_size`
+/// (see `rylus_websocket_channel_from_hyper_upgrade`), so it caps binary
+/// frames too — an oversized frame of either kind is rejected during
+/// reassembly rather than being buffered in full.
 const MAX_TEXT_FRAME_SIZE: usize = 64 * 1024; // 64 KB
 
 /// Idle timeout: close the connection if no message is received within this duration.
@@ -110,15 +113,6 @@ pub struct WsRylusSender {
     video: VideoQueue,
 }
 
-impl WsRylusSender {
-    /// Number of video frames dropped by the drop-oldest queue since creation.
-    /// Useful for QoE telemetry and for triggering keyframe requests on
-    /// sustained backpressure.
-    pub fn dropped_video_frames(&self) -> u64 {
-        self.video.dropped.load(Ordering::Relaxed)
-    }
-}
-
 impl RylusSender for WsRylusSender {
     type Error = tokio::sync::mpsc::error::SendError<WsMessage>;
 
@@ -145,10 +139,17 @@ pub async fn rylus_websocket_channel_from_hyper_upgrade(
     upgraded: hyper::upgrade::Upgraded,
     semaphore_shutdown: Arc<tokio::sync::Semaphore>,
 ) -> (WsRylusSender, WsRylusReceiver) {
+    // Cap inbound message/frame size at the protocol level so an oversized
+    // frame is rejected during reassembly instead of being buffered in full
+    // (tungstenite's default cap is 64 MiB) and only then checked against
+    // MAX_TEXT_FRAME_SIZE.
+    let config = tokio_tungstenite::tungstenite::protocol::WebSocketConfig::default()
+        .max_message_size(Some(MAX_TEXT_FRAME_SIZE))
+        .max_frame_size(Some(MAX_TEXT_FRAME_SIZE));
     let ws_stream = WebSocketStream::from_raw_socket(
         TokioIo::new(upgraded),
         tokio_tungstenite::tungstenite::protocol::Role::Server,
-        None,
+        Some(config),
     )
     .await;
     rylus_websocket_channel(ws_stream, semaphore_shutdown)

@@ -12,11 +12,12 @@ members = [
 
 [workspace.package]
 version = "0.17.0"
-authors = ["HMH <henry@freedesk.net>"]
+authors = ["Chorosyne maintainers"]
 edition = "2021"
+rust-version = "1.88"
 license = "AGPL-3.0-or-later"
-repository = "https://github.com/revelri/Rylus"
-homepage = "https://github.com/revelri/Rylus"
+repository = "https://github.com/Chorosyne/rylus"
+homepage = "https://github.com/Chorosyne/rylus"
 
 [workspace.dependencies]
 # Internal crates

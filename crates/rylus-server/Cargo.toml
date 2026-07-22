@@ -25,6 +25,7 @@ rylus-transport = { workspace = true }
 rylus-gui = { workspace = true, optional = true }
 
 argon2 = "0.5"
+dirs = "^5.0"
 parking_lot = { workspace = true }
 bytes = "1.11"
 clap = { workspace = true }
@@ -47,6 +48,8 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 url = "^2.5"
 hostname = "0.4"
+if-addrs = "0.13"
+time = "0.3"
 
 [package.metadata.bundle]
 name = "Rylus"

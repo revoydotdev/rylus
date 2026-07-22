@@ -1,5 +1,104 @@
 # Changelog
 
+## [Unreleased] — 1.0 path
+
+### Added
+
+- **`rylus-server --self-test` flag:** boots the server, captures one frame
+  (synthetic source, no display required), encodes one software H.264 frame,
+  accepts one WebSocket client (`101 Switching Protocols`), then exits `0`/`1`
+  under a watchdog timeout. Wired into a per-OS CI smoke matrix that gates the
+  release builds via `needs:`.
+- **`docs/PROTOCOL.md` wire-format spec:** documents all protocol messages
+  (Hello/HelloAck/HelloNack, Config, CapturableList, Heartbeat/HeartbeatAck,
+  RequestKeyframe, ClientRtt, NewVideo/VideoFrame), framing (little-endian
+  length prefix + JSON/binary payload), and versioning contract (protocol
+  version 3 as of v0.17.0, `MIN_CLIENT_PROTOCOL_VERSION` enforced via
+  `HelloNack`).
+- **`docs/SECURITY-REVIEW.md`:** pre-1.0 security review covering argon2 auth
+  params, rate-limit tuning, TLS cert generation and storage, session-token
+  lifecycle, and explicit WebSocket `Origin` validation.
+- **README accuracy pass:** corrected stale WebSocket port 9001 references
+  (WS is now at `/ws` on the same port as HTTP), corrected TLS default (Auto
+  mode generates a self-signed cert on first run, not "no TLS by default"),
+  documented `--tls-mode` / `--tls-cert-path` / `--tls-key-path` flags, added
+  minimal headless invocation examples, and updated badge/clone URLs to the
+  `Chorosyne/rylus` org.
+- **Latency budget benchmark harness (`rylus-encode` `bench` bin):** a
+  std-only harness that times the display-free hot paths — software H.264
+  encode of a synthetic frame (the `--self-test` path) and protocol message
+  serialize/deserialize — against explicit per-target latency budgets, exiting
+  non-zero when a budget is exceeded. Wired into a `bench.yml` CI job so a
+  latency regression fails the build.
+
+### Fixed
+
+- **WebSocket handshake was RFC-invalid — no browser could connect.** The
+  fastwebsockets → hyper migration dropped the handshake response headers; the
+  server answered a bare `101` with no `Sec-WebSocket-Accept`, which compliant
+  browsers must reject. The server now derives the accept key, validates
+  `Sec-WebSocket-Key`/`-Version`, and `--self-test` verifies the accept key so
+  this cannot regress silently again.
+- **Access-code rotation now takes effect immediately.** Rotating the code via
+  the settings API cleared sessions but kept verifying against the old hash
+  until restart — the old code stayed valid and the new one was rejected. The
+  live hash is now swapped atomically; verified end-to-end.
+- **Padded-stride RGBx/RGBA PipeWire frames no longer corrupt video.** The
+  "strip padding" fallback returned the raw padded buffer labeled tightly
+  packed; any compositor negotiating aligned row strides produced diagonally
+  torn frames. Rows are now compacted in place.
+- **Keyframe requests can no longer be dropped under load.** IDR requests and
+  QP changes ride along with the next frame command instead of a standalone
+  try_send on a capacity-1 channel that is full exactly when the encoder is
+  busy; decode-error recovery no longer risks a frozen stream.
+- **Adaptive quality now sees real encoder saturation.** The controller was fed
+  capture time mislabeled as encode time; it now uses the encode thread's
+  measured per-frame duration, plus a full-budget sample on busy-encoder drops.
+- **Encoder failures fail loudly.** `avformat_write_header` errors were
+  swallowed (dark stream, zero diagnostics) and `Drop` called
+  `av_write_trailer` on never-initialized muxers (UB). Both fixed.
+- **iOS trust and Home Screen flows.** Self-signed certs now carry SANs
+  (hostname, `.local`, local IPs) and 730-day validity — iOS refuses certs
+  without either; `apple-touch-icon` pointed at the JSON manifest and now
+  serves a real 180×180 PNG.
+- **uinput multitouch correctness:** BTN_TOOL_* finger count derives from live
+  active touches (was: recycled slot index); slot array matches the declared
+  ABS_MT_SLOT range; the stuck-pen-hover watchdog runs even with touch
+  disabled; coordinates are clamped before ABS scaling.
+- **Client reconnect hygiene:** the Painter rAF loop and the WebCodecs
+  hardware decoder are now released on reconnect (previously leaked per
+  reconnect); the settings panel no longer dismisses on Apple Pencil hover.
+- **X11 capture privacy:** the SysV SHM segment holding live screen contents
+  was world-readable/writable (`0o777`), now owner-only. RandR monitor
+  geometry is re-queried live, so hotplug/resolution changes are tracked.
+- Double mDNS registration in headless mode; 64 KiB inbound message cap now
+  enforced at the WebSocket protocol level (was checked only after a full
+  64 MiB-capped message was buffered); session cookies gain `Secure` under
+  TLS; client-handler panics no longer hang shutdown.
+
+### Changed
+
+- **Custom Input Areas removed (honest disable).** The egui-era stub returned
+  a fake full-screen selection that the UI displayed as configured success.
+  The client UI is gone, the server replies with a clear ConfigError, and a
+  real client-side picker is on the roadmap.
+- **First-run onboarding is live.** The built-but-unwired three-step wizard now
+  shows on first visit. The local ink preview uses browser-predicted pointer
+  events for a lower-perceived-latency stroke tail (never sent to the server).
+- **Latency bench split:** encoder construction and warmed-up steady-state
+  per-frame encode are now separate CI budgets; MediaFoundation gains
+  `AV_CODEC_FLAG_LOW_DELAY`.
+- Dead code removed: multi-client broadcast scaffolding, the unused transport
+  compress module (+ `flate2` dependency), never-imported client helpers.
+  `docs/adr/0001` records the WebSocket-only transport decision with the 2026
+  prior-art research behind it.
+
+- **TLS auto-mode private key is no longer world-readable.** The self-signed
+  cert/key pair is now stored under the per-user XDG state dir
+  (`~/.local/state/rylus`, falling back to `~/.config/rylus`) instead of the
+  shared `/tmp/rylus`. On Unix the directory is created `0700` and the private
+  key is written `0600`; the public cert remains `0644`.
+
 ## [Unreleased]
 
 ### Added

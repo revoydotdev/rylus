@@ -238,6 +238,18 @@ impl ScaleContext {
             (*frame_in).format = pix_fmt_in as c_int;
             (*frame_in).width = width_in;
             (*frame_in).height = height_in;
+            // This backing buffer is never read: `encode()` always overwrites
+            // frame_in->data[0]/linesize[0] to alias the caller's pixel buffer
+            // before every use (see the zero-copy note on `encode()` below).
+            // It is still required, though: `av_frame_get_buffer` is what
+            // gives frame_in a non-null buf[0]. `av_buffersrc_add_frame_flags`
+            // (called with AV_BUFFERSRC_FLAG_KEEP_REF in `scale()`) internally
+            // calls `av_frame_ref`, which only takes the cheap "share the data
+            // pointer, bump the AVBufferRef refcount" path when buf[0] is
+            // non-null; if buf[0] were null, av_frame_ref instead allocates a
+            // fresh buffer and does a full `av_frame_copy` (a real memcpy) on
+            // every single frame. So this allocation is what makes the
+            // zero-copy path zero-copy, even though its own bytes are unused.
             let ret = ffi::av_frame_get_buffer(frame_in, 0);
             if ret != 0 {
                 ffi::av_frame_free(&mut { frame_in });
@@ -436,6 +448,19 @@ impl ScaleContext {
                     return Err(enc_err!("Error reading frame from buffer sink"));
                 }
             }
+            // `VideoEncoder::encode`'s zero-copy trick (pointing frame_in->data[0]
+            // at a caller-borrowed slice, see the comment there) is only sound
+            // because this filter graph drains synchronously: one frame in
+            // always yields exactly one frame out within this call, so the
+            // borrowed pointer never needs to outlive `scale()`. A future
+            // filter that buffers/reorders (deinterlace, denoise, rate
+            // conversion, ...) would break that and silently use-after-free
+            // the capture buffer. This assert is a cheap canary for that.
+            debug_assert!(
+                !(*self.frame_out).data[0].is_null(),
+                "filter graph produced no output frame synchronously; \
+                 zero-copy frame_in invariant (see VideoEncoder::encode) is violated"
+            );
             Ok(())
         }
     }
@@ -607,6 +632,13 @@ pub struct VideoEncoder {
     /// (reconnect / tab refocus / decode-error recovery) and by the first frame
     /// after encoder restart.
     force_keyframe: bool,
+    /// Set once `avformat_write_header` has succeeded. `format_ctx` is
+    /// allocated well before the header is written (see `open_video`), so on
+    /// an early `Err` return from `open_video` it can be non-null with no
+    /// header ever written; `Drop` uses this to avoid calling
+    /// `av_write_trailer` on a muxer whose internal state was never
+    /// initialized, which is undefined behavior per the FFmpeg API contract.
+    header_written: bool,
 }
 
 // VideoEncoder contains raw FFmpeg pointers that are not thread-safe.
@@ -653,6 +685,7 @@ impl VideoEncoder {
             // First real frame after construction should be an IDR so late joiners
             // and post-restart clients don't wait a full GOP for playback to start.
             force_keyframe: true,
+            header_written: false,
         });
 
         encoder.open_video(options)?;
@@ -744,14 +777,7 @@ impl VideoEncoder {
                 ffi::AVIO_FLAG_WRITE,
                 self as *mut Self as *mut c_void,
                 None,
-                // SAFETY: avio_alloc_context's write callback signature changed between
-                // FFmpeg versions (*const u8 in older, *mut u8 in newer). We cast the
-                // function pointer via `as` to erase the exact type, then transmute to
-                // match whichever FFmpeg is installed. The callback only reads from buf.
-                #[allow(clippy::missing_transmute_annotations)]
-                Some(std::mem::transmute::<usize, _>(
-                    avio_write_callback as *const () as usize,
-                )),
+                Some(avio_write_callback),
                 None,
             );
             if avio.is_null() {
@@ -771,8 +797,9 @@ impl VideoEncoder {
             let ret = ffi::avformat_write_header(self.format_ctx, &mut opt);
             ffi::av_dict_free(&mut opt);
             if ret < 0 {
-                warn!("Video: failed to write header!");
+                return Err(enc_err!("Video: failed to write header: {}", ret));
             }
+            self.header_written = true;
 
             let codec_name = CStr::from_ptr((*(*self.codec_ctx).codec).name).to_string_lossy();
             let pix_fmt = pix_fmt_name((*self.codec_ctx).pix_fmt);
@@ -949,6 +976,11 @@ impl VideoEncoder {
                 AVPixelFormat::AV_PIX_FMT_NV12,
                 false,
                 |c| {
+                    // FFmpeg's mfenc.c only issues CODECAPI_AVLowLatencyMode
+                    // (Media Foundation's own low-latency toggle) when
+                    // AV_CODEC_FLAG_LOW_DELAY is set on the codec context —
+                    // there is no separate named AVOption for it.
+                    (*c).flags |= ffi::AV_CODEC_FLAG_LOW_DELAY as c_int;
                     ffi::av_opt_set(
                         (*c).priv_data,
                         c"rate_control".as_ptr(),
@@ -1094,6 +1126,14 @@ impl VideoEncoder {
             }
         };
 
+        // ZERO-COPY INVARIANT: every arm below points `frame_in.data[0]`
+        // directly at `pixel_provider`'s borrowed slice instead of copying it
+        // into the (still-allocated, otherwise-unused) buffer from
+        // `av_frame_get_buffer` in `ScaleContext::new`. This is safe only
+        // because `ScaleContext::scale()` fully drains the filter graph
+        // synchronously within this call (see the debug_assert in `scale()`)
+        // — the borrowed pointer's lifetime never has to extend past this
+        // function returning.
         let scaler = match pixel_provider {
             PixelProvider::BGR0(w, h, bgr0) => {
                 let expected = w * h * 4;
@@ -1299,7 +1339,13 @@ impl Drop for VideoEncoder {
         // context is freed before the format context that references it.
         unsafe {
             if !self.format_ctx.is_null() {
-                ffi::av_write_trailer(self.format_ctx);
+                // Only muxers whose header was actually written have the
+                // internal state (track/moov bookkeeping) write_trailer
+                // assumes is present; calling it on an uninitialized muxer
+                // is undefined by the FFmpeg API contract.
+                if self.header_written {
+                    ffi::av_write_trailer(self.format_ctx);
+                }
                 if !(*self.format_ctx).pb.is_null() {
                     ffi::avio_context_free(&mut (*self.format_ctx).pb);
                 }

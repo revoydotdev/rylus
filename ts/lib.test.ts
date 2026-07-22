@@ -1,65 +1,39 @@
 import { describe, it, expect } from 'vitest';
+import { computeNormalizedCoord } from './lib';
 
-// Since lib.ts doesn't export functions (it's a self-executing module),
-// we test the core algorithms by reimplementing the transform logic here
-// and verifying it matches the expected behavior. If lib.ts is refactored
-// to export these functions, these tests can be updated to import directly.
+// computeNormalizedCoord is the real function PEvent's constructor uses to
+// turn a client-space pointer position into the [0,1] normalized coordinate
+// sent over the wire — imported directly so a regression here is actually
+// caught, rather than tested against a hand-copied reimplementation.
 
 describe('Coordinate transforms', () => {
-    // From lib.ts PEvent constructor: normalized = (clientX - left) / width
-    function normalizeCoord(clientPos: number, rectStart: number, rectSize: number): number {
-        return (clientPos - rectStart) / rectSize;
-    }
-
     it('normalizes center of rect to 0.5', () => {
-        expect(normalizeCoord(500, 0, 1000)).toBeCloseTo(0.5);
+        expect(computeNormalizedCoord(500, 0, 1000)).toBeCloseTo(0.5);
     });
 
     it('normalizes start of rect to 0.0', () => {
-        expect(normalizeCoord(0, 0, 1000)).toBeCloseTo(0.0);
+        expect(computeNormalizedCoord(0, 0, 1000)).toBeCloseTo(0.0);
     });
 
     it('normalizes end of rect to 1.0', () => {
-        expect(normalizeCoord(1000, 0, 1000)).toBeCloseTo(1.0);
+        expect(computeNormalizedCoord(1000, 0, 1000)).toBeCloseTo(1.0);
     });
 
     it('handles offset rect', () => {
         // Rect starts at x=100, width=800
-        expect(normalizeCoord(500, 100, 800)).toBeCloseTo(0.5);
-        expect(normalizeCoord(100, 100, 800)).toBeCloseTo(0.0);
-        expect(normalizeCoord(900, 100, 800)).toBeCloseTo(1.0);
+        expect(computeNormalizedCoord(500, 100, 800)).toBeCloseTo(0.5);
+        expect(computeNormalizedCoord(100, 100, 800)).toBeCloseTo(0.0);
+        expect(computeNormalizedCoord(900, 100, 800)).toBeCloseTo(1.0);
     });
 
     it('handles out-of-bounds (negative result)', () => {
         // Mouse is left of rect
-        expect(normalizeCoord(-10, 0, 1000)).toBeLessThan(0);
+        expect(computeNormalizedCoord(-10, 0, 1000)).toBeLessThan(0);
     });
 
     it('handles out-of-bounds (above 1.0)', () => {
         // Mouse is right of rect
-        expect(normalizeCoord(1100, 0, 1000)).toBeGreaterThan(1);
-    });
-
-    // Custom input area scaling from lib.ts:
-    // scaledX = normalizedX * scale + offset
-    function applyCustomArea(
-        normalized: number,
-        areaStart: number,
-        areaSize: number
-    ): number {
-        return normalized * areaSize + areaStart;
-    }
-
-    it('custom area identity (full screen)', () => {
-        // Area covers [0, 1] → no transformation
-        expect(applyCustomArea(0.5, 0, 1)).toBeCloseTo(0.5);
-    });
-
-    it('custom area maps to sub-region', () => {
-        // Area covers [0.25, 0.75] (width=0.5, start=0.25)
-        expect(applyCustomArea(0.0, 0.25, 0.5)).toBeCloseTo(0.25);
-        expect(applyCustomArea(0.5, 0.25, 0.5)).toBeCloseTo(0.5);
-        expect(applyCustomArea(1.0, 0.25, 0.5)).toBeCloseTo(0.75);
+        expect(computeNormalizedCoord(1100, 0, 1000)).toBeGreaterThan(1);
     });
 });
 

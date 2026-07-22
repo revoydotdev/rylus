@@ -45,6 +45,15 @@ The server validates the upgrade request's `Origin` header against `Host`
 doesn't match `Host`, the upgrade is rejected. Non-browser clients that omit
 `Origin` entirely are accepted at this layer.
 
+The upgrade itself follows RFC 6455: the server validates
+`Sec-WebSocket-Version: 13` (else `426 Upgrade Required`) and
+`Sec-WebSocket-Key` (else `400`), and responds `101 Switching Protocols` with
+`Upgrade: websocket`, `Connection: Upgrade`, and the derived
+`Sec-WebSocket-Accept` header (`ws_handshake_response`,
+`crates/rylus-server/src/web.rs`). Browsers reject the connection if
+`Sec-WebSocket-Accept` is missing or wrong, so `--self-test` verifies the
+derived value against the RFC's own worked example.
+
 ### 1.2 Hello handshake
 
 Once the socket is open, the client sends `Hello` and the server echoes

@@ -63,11 +63,6 @@ fn main() {
         return;
     }
 
-    if conf.self_test {
-        let passed = self_test::run();
-        std::process::exit(if passed { 0 } else { 1 });
-    }
-
     #[cfg(target_os = "linux")]
     {
         // make sure XInitThreads is called before any threading is done
@@ -75,6 +70,13 @@ fn main() {
         rylus_capture::x11::x11_init();
 
         pipewire::init();
+    }
+
+    if conf.self_test {
+        // Short-circuit: run the built-in smoke test and exit.
+        // self_test::run() calls std::process::exit(0|1) and never returns.
+        self_test::run();
+        return;
     }
 
     #[cfg(feature = "gui")]
@@ -89,15 +91,9 @@ fn main() {
 }
 
 fn run_headless(conf: Config) {
+    // mDNS registration happens inside Rylus::start — registering here too
+    // would advertise the same instance name from two daemons.
     let mut rylus_server = rylus::Rylus::new();
-    let mut mdns_publisher = if !conf.no_mdns {
-        Some(mdns::MdnsPublisher::new())
-    } else {
-        None
-    };
-    if let Some(ref mut publisher) = mdns_publisher {
-        publisher.register(conf.web_port, None).ok();
-    }
     if !rylus_server.start(
         &conf,
         Box::new(|msg| match msg {

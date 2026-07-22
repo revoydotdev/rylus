@@ -22,8 +22,13 @@ mod sysv_shm {
     /// Allocate a SysV shared memory segment. Returns (shm_id, address).
     pub fn alloc(size: usize) -> Result<(i32, *mut u8), String> {
         // SAFETY: IPC_PRIVATE (0) creates a new unique segment. The flags request
-        // creation with rwxrwxrwx permissions.
-        let shm_id = unsafe { libc::shmget(libc::IPC_PRIVATE, size, libc::IPC_CREAT | 0o777) };
+        // creation with rw------- (owner-only) permissions: this segment carries
+        // live screen contents, and the X server attaches to it via its own
+        // privileges (root or the session's Xorg process), not via the "group"/
+        // "other" permission bits, so no wider access is needed. A more
+        // permissive mode would let any other local user on a multi-user system
+        // read (privacy leak) or write (corrupt) the captured frame.
+        let shm_id = unsafe { libc::shmget(libc::IPC_PRIVATE, size, libc::IPC_CREAT | 0o600) };
         if shm_id < 0 {
             return Err(format!(
                 "shmget failed: {}",
@@ -74,6 +79,11 @@ enum CaptureTarget {
         y: i16,
         width: u16,
         height: u16,
+        /// RandR output name atom for this monitor, used to re-query live
+        /// geometry on every capture (see `get_target_geometry`). `x`/`y`/
+        /// `width`/`height` above are only the geometry as of enumeration
+        /// time and are not re-read after construction.
+        monitor: xproto::Atom,
     },
 }
 
@@ -117,6 +127,7 @@ impl Capturable for X11Capturable {
                 y,
                 width,
                 height,
+                ..
             } => {
                 let xf = *x as f64 / screen_width;
                 let yf = *y as f64 / screen_height;
@@ -214,6 +225,7 @@ impl X11Context {
                                 y: mon.y,
                                 width: mon.width,
                                 height: mon.height,
+                                monitor: mon.name,
                             },
                             name: format!("Monitor: {}", mon_name),
                             conn: self.conn.clone(),
@@ -580,12 +592,26 @@ fn get_target_geometry(
                 geom.height,
             ))
         }
-        CaptureTarget::Rect {
-            x,
-            y,
-            width,
-            height,
-        } => Ok((*x as i32, *y as i32, *width, *height)),
+        CaptureTarget::Rect { monitor, .. } => {
+            // RandR monitor geometry can change after enumeration (hotplug,
+            // resolution change, repositioning). Re-query live on every
+            // capture, matching by output atom, the same way Window targets
+            // re-query geometry above instead of trusting a frozen snapshot.
+            // If RandR is unavailable or the monitor is gone, surface an
+            // error rather than silently capturing a stale region.
+            let reply = conn
+                .randr_get_monitors(root, true)
+                .map_err(|e| CError::with_code(1, &format!("randr_get_monitors failed: {}", e)))?
+                .reply()
+                .map_err(|e| CError::with_code(1, &format!("randr_get_monitors failed: {}", e)))?;
+            match reply.monitors.iter().find(|m| m.name == *monitor) {
+                Some(mon) => Ok((mon.x as i32, mon.y as i32, mon.width, mon.height)),
+                None => Err(CError::with_code(
+                    1,
+                    "Monitor is no longer present (unplugged or RandR layout changed)",
+                )),
+            }
+        }
     }
 }
 

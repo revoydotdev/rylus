@@ -8,7 +8,7 @@ use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper::{Method, Request, Response, StatusCode};
 use hyper_util::rt::TokioIo;
-use parking_lot::Mutex;
+use parking_lot::{Mutex, RwLock};
 use rand::Rng;
 use serde::Serialize;
 use std::collections::HashMap;
@@ -106,6 +106,7 @@ pub const LIB_JS: &str = std::include_str!("../../../www/static/lib.js");
 pub const SETTINGS_HTML: &str = std::include_str!("../../../www/static/settings.html");
 pub const SW_JS: &str = std::include_str!("../../../www/static/sw.js");
 pub const MANIFEST: &str = std::include_str!("../../../www/static/manifest.webmanifest");
+pub const APPLE_TOUCH_ICON: &[u8] = std::include_bytes!("../../../www/static/apple-touch-icon.png");
 
 /// Maximum failed auth attempts per IP before rate limiting kicks in.
 const MAX_FAILED_ATTEMPTS: u32 = 5;
@@ -221,11 +222,9 @@ impl SessionStore {
 
 #[derive(Serialize)]
 struct IndexTemplateContext {
-    access_code: Option<String>,
     uinput_enabled: bool,
     capture_cursor_enabled: bool,
     log_level: String,
-    enable_custom_input_areas: bool,
 }
 
 fn response_from_str(s: &str, content_type: &str) -> Response<Full<Bytes>> {
@@ -271,6 +270,52 @@ async fn response_from_path_or_default(
         },
         None => response_from_str(default, content_type),
     }
+}
+
+/// The standard response type served by this module.
+type WebResponse = Response<BoxBody<Bytes, Infallible>>;
+
+/// Validate the WebSocket upgrade request and build the RFC 6455 handshake
+/// response. Returns an error response if the request is not a well-formed
+/// WebSocket upgrade (missing key, wrong version).
+///
+/// The `Sec-WebSocket-Accept` header is mandatory: browsers fail the
+/// connection if it is absent or wrong (RFC 6455 §4.1). This was regressed
+/// once during the fastwebsockets → hyper migration; the self-test now
+/// verifies the accept key to keep it from regressing silently.
+fn ws_handshake_response(req: &Request<Incoming>) -> Result<WebResponse, Box<WebResponse>> {
+    let version_ok = req
+        .headers()
+        .get("sec-websocket-version")
+        .and_then(|h| h.to_str().ok())
+        .is_some_and(|v| v.split(',').any(|v| v.trim() == "13"));
+    if !version_ok {
+        return Err(Box::new(
+            Response::builder()
+                .status(StatusCode::UPGRADE_REQUIRED)
+                .header("sec-websocket-version", "13")
+                .body(Full::new(Bytes::from("unsupported websocket version")).boxed())
+                .expect("upgrade required response builder should not fail"),
+        ));
+    }
+    let key = match req.headers().get("sec-websocket-key") {
+        Some(k) => k.as_bytes(),
+        None => {
+            return Err(Box::new(boxed_response(
+                StatusCode::BAD_REQUEST,
+                "text/plain; charset=utf-8",
+                "missing Sec-WebSocket-Key",
+            )));
+        }
+    };
+    let accept = rylus_transport::derive_accept_key(key);
+    Ok(Response::builder()
+        .status(StatusCode::SWITCHING_PROTOCOLS)
+        .header("upgrade", "websocket")
+        .header("connection", "Upgrade")
+        .header("sec-websocket-accept", accept)
+        .body(http_body_util::Empty::new().boxed())
+        .expect("switching protocols response builder should not fail"))
 }
 
 /// Compare a WebSocket upgrade's Origin and Host headers. Returns true when
@@ -350,13 +395,7 @@ async fn serve(
     // Settings page and config API require access-code auth when one is
     // configured — otherwise an unauthenticated LAN peer could enumerate
     // capturables, read the access code itself, or rewrite the config.
-    let preauthed = if context.web_config.access_code_hash.is_some() {
-        extract_session_token(&req)
-            .map(|t| context.session_store.is_valid(&t))
-            .unwrap_or(false)
-    } else {
-        true
-    };
+    let preauthed = context.is_authed(&req);
     match (req.method(), req.uri().path()) {
         (&Method::GET, "/settings") => {
             if !preauthed {
@@ -388,7 +427,7 @@ async fn serve(
                     "unauthorized",
                 ));
             }
-            return handle_post_config(req, &context.session_store).await;
+            return handle_post_config(req, &context).await;
         }
         _ => {}
     }
@@ -398,7 +437,8 @@ async fn serve(
     // access_code.html can show an inline, countdown-aware error and the
     // browser back button returns to a clean login screen.
     if req.method() == Method::POST && req.uri().path() == "/auth" {
-        if let Some(ref access_code_hash) = context.web_config.access_code_hash {
+        let access_code_hash = context.access_code_hash.read().clone();
+        if let Some(ref access_code_hash) = access_code_hash {
             // Check rate limit
             if let Some(retry) = context.rate_limiter.lockout_remaining(&addr.ip()) {
                 warn!(address = ?addr, retry_s = retry, "Auth attempt rejected: rate limited.");
@@ -432,13 +472,18 @@ async fn serve(
                 if !code.is_empty() && verify_access_code(code, access_code_hash) {
                     let token = context.session_store.create_session();
                     debug!(address = ?addr, "Client authenticated via POST.");
+                    let secure = if context.secure_cookies {
+                        "; Secure"
+                    } else {
+                        ""
+                    };
                     return Ok(Response::builder()
                         .status(StatusCode::SEE_OTHER)
                         .header("location", "/")
                         .header(
                             "set-cookie",
                             format!(
-                                "rylus_session={token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=86400"
+                                "rylus_session={token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=86400{secure}"
                             ),
                         )
                         .body(Full::new(Bytes::from("Redirecting...")).boxed())
@@ -463,14 +508,7 @@ async fn serve(
     }
 
     // Determine auth status
-    let authed = if context.web_config.access_code_hash.is_some() {
-        // Check session cookie
-        extract_session_token(&req)
-            .map(|t| context.session_store.is_valid(&t))
-            .unwrap_or(false)
-    } else {
-        true
-    };
+    let authed = context.is_authed(&req);
 
     if *req.method() != Method::GET {
         return Ok(response_not_found().map(|r| r.boxed()));
@@ -488,11 +526,9 @@ async fn serve(
                 .map(|r| r.boxed()));
             }
             let config = IndexTemplateContext {
-                access_code: context.web_config.access_code.clone(),
                 uinput_enabled: cfg!(target_os = "linux"),
                 capture_cursor_enabled: cfg!(not(target_os = "windows")),
                 log_level: rylus_core::get_log_level().to_string(),
-                enable_custom_input_areas: context.web_config.enable_custom_input_areas,
             };
 
             let html = if let Some(path) = context.web_config.custom_index_html.as_ref() {
@@ -545,6 +581,13 @@ async fn serve(
                     .expect("forbidden response builder should not fail"));
             }
 
+            // Build (and validate) the handshake response before consuming the
+            // request for the upgrade future.
+            let response = match ws_handshake_response(&req) {
+                Ok(r) => r,
+                Err(reject) => return Ok(*reject),
+            };
+
             let on_upgrade = hyper::upgrade::on(req);
             num_clients.fetch_add(1, Ordering::Relaxed);
 
@@ -558,21 +601,31 @@ async fn serve(
                         )
                         .await;
                         std::thread::spawn(move || {
-                            let client = RylusClientHandler::new(
-                                sender,
-                                receiver,
-                                || {
-                                    if let Err(err) =
-                                        sender_ui.blocking_send(Web2UiMessage::UInputInaccessible)
-                                    {
-                                        warn!(
-                                            "Failed to send message 'UInputInaccessible': {err}."
-                                        );
-                                    }
+                            // Decrement even if the handler panics — otherwise
+                            // server shutdown waits forever on a client count
+                            // that can no longer reach zero.
+                            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(
+                                move || {
+                                    let client = RylusClientHandler::new(
+                                        sender,
+                                        receiver,
+                                        || {
+                                            if let Err(err) = sender_ui
+                                                .blocking_send(Web2UiMessage::UInputInaccessible)
+                                            {
+                                                warn!(
+                                                    "Failed to send message 'UInputInaccessible': {err}."
+                                                );
+                                            }
+                                        },
+                                        config,
+                                    );
+                                    client.run();
                                 },
-                                config,
-                            );
-                            client.run();
+                            ));
+                            if result.is_err() {
+                                error!("Client handler thread panicked.");
+                            }
                             num_clients.fetch_sub(1, Ordering::Relaxed);
                             notify_disconnect.notify_waiters();
                         });
@@ -585,10 +638,7 @@ async fn serve(
                 }
             });
 
-            Ok(Response::builder()
-                .status(StatusCode::SWITCHING_PROTOCOLS)
-                .body("switching to websocket".to_string().boxed())
-                .expect("switching protocols response builder should not fail"))
+            Ok(response)
         }
         "/style.css" => Ok(response_from_path_or_default(
             context.web_config.custom_style_css.as_ref(),
@@ -615,6 +665,13 @@ async fn serve(
             "application/manifest+json; charset=utf-8",
         )
         .map(|r| r.boxed())),
+        // Pre-auth like the manifest: iOS fetches the touch icon outside any
+        // authenticated session during Add to Home Screen.
+        "/apple-touch-icon.png" => Ok(Response::builder()
+            .status(StatusCode::OK)
+            .header("content-type", "image/png")
+            .body(Full::new(Bytes::from_static(APPLE_TOUCH_ICON)).boxed())
+            .expect("icon response builder should not fail")),
         _ => Ok(response_not_found().map(|r| r.boxed())),
     }
 }
@@ -671,7 +728,7 @@ fn handle_get_config() -> Result<Response<BoxBody<Bytes, Infallible>>, hyper::Er
 
 async fn handle_post_config(
     req: Request<Incoming>,
-    session_store: &SessionStore,
+    context: &ServeContext<'_>,
 ) -> Result<Response<BoxBody<Bytes, Infallible>>, hyper::Error> {
     use clap::Parser as _;
     let body = req.collect().await.map(|c| c.to_bytes());
@@ -735,14 +792,16 @@ async fn handle_post_config(
         config.web_port = port;
     }
     // access_code: absent = don't change, null = clear, string = set.
-    // Rotating the code invalidates every existing session so connected
+    // Rotating the code swaps the live verification hash immediately (no
+    // restart needed) and invalidates every existing session so connected
     // tablets are forced to re-authenticate with the new code.
     if let Some(code) = update.access_code {
         let rotated = config.access_code != code;
         config.access_code = code;
         if rotated {
             info!("Access code rotated; invalidating all active sessions.");
-            session_store.clear();
+            *context.access_code_hash.write() = config.access_code.as_deref().map(hash_access_code);
+            context.session_store.clear();
         }
     }
 
@@ -779,14 +838,13 @@ async fn handle_post_config(
 #[derive(Clone)]
 pub struct WebServerConfig {
     pub bind_addr: SocketAddr,
-    pub access_code: Option<String>,
     /// Pre-computed argon2 hash of the access code (None if no access code set).
+    /// The plaintext code is never retained here — verification only needs the hash.
     pub access_code_hash: Option<String>,
     pub custom_index_html: Option<PathBuf>,
     pub custom_access_html: Option<PathBuf>,
     pub custom_style_css: Option<PathBuf>,
     pub custom_lib_js: Option<PathBuf>,
-    pub enable_custom_input_areas: bool,
 }
 
 impl WebServerConfig {
@@ -798,7 +856,6 @@ impl WebServerConfig {
         custom_access_html: Option<PathBuf>,
         custom_style_css: Option<PathBuf>,
         custom_lib_js: Option<PathBuf>,
-        enable_custom_input_areas: bool,
     ) -> Self {
         let access_code_hash = access_code.as_ref().map(|code| {
             info!("Hashing access code with argon2...");
@@ -806,13 +863,11 @@ impl WebServerConfig {
         });
         Self {
             bind_addr,
-            access_code,
             access_code_hash,
             custom_index_html,
             custom_access_html,
             custom_style_css,
             custom_lib_js,
-            enable_custom_input_areas,
         }
     }
 }
@@ -823,6 +878,25 @@ struct ServeContext<'a> {
     templates: Handlebars<'a>,
     rate_limiter: RateLimiter,
     session_store: SessionStore,
+    /// Current argon2 hash of the access code. Mutable so a rotation via
+    /// POST /api/config takes effect immediately instead of after restart.
+    access_code_hash: RwLock<Option<String>>,
+    /// Whether the server is running with TLS — session cookies get the
+    /// `Secure` attribute so they are never replayed over plaintext.
+    secure_cookies: bool,
+}
+
+impl ServeContext<'_> {
+    /// A request is authenticated when no access code is configured, or when
+    /// it carries a valid session cookie.
+    fn is_authed(&self, req: &Request<Incoming>) -> bool {
+        if self.access_code_hash.read().is_none() {
+            return true;
+        }
+        extract_session_token(req)
+            .map(|t| self.session_store.is_valid(&t))
+            .unwrap_or(false)
+    }
 }
 
 pub fn run(
@@ -838,12 +912,15 @@ pub fn run(
         .register_template_string("index", INDEX_HTML)
         .expect("built-in index template must be valid");
 
+    let access_code_hash = RwLock::new(web_server_config.access_code_hash.clone());
     let context = ServeContext {
         web_config: web_server_config,
         rylus_client_config,
         templates,
         rate_limiter: RateLimiter::new(),
         session_store: SessionStore::new(),
+        access_code_hash,
+        secure_cookies: tls_config.is_some(),
     };
     std::thread::spawn(move || {
         run_server(
@@ -1199,9 +1276,7 @@ mod tests {
             None,
             None,
             None,
-            false,
         );
-        assert!(config.access_code.is_none());
         assert!(config.access_code_hash.is_none());
     }
 
@@ -1214,9 +1289,7 @@ mod tests {
             None,
             None,
             None,
-            false,
         );
-        assert_eq!(config.access_code.as_deref(), Some("testcode"));
         assert!(config.access_code_hash.is_some());
         // The hash should verify against the original code
         assert!(verify_access_code(

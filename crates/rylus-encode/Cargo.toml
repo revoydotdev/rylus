@@ -6,6 +6,10 @@ edition.workspace = true
 license.workspace = true
 description = "Video encoding for Rylus"
 
+[[bin]]
+name = "bench"
+path = "src/bin/bench.rs"
+
 [dependencies]
 rylus-core = { workspace = true }
 tracing = { workspace = true }

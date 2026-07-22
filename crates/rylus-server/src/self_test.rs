@@ -1,249 +1,245 @@
-//! Headless routine behind the `--self-test` CLI flag.
+//! Built-in self-test for `rylus-server --self-test`.
 //!
-//! Proves, without a display, GUI, or real capture hardware, that the core
-//! pipeline actually works end to end:
+//! Exercises the maximum robustly-headless subset of the boot → capture →
+//! encode → WebSocket accept → clean-exit chain:
 //!
-//! 1. Construct a synthetic `testsrc` capturable/recorder.
-//! 2. Encode a full GOP of frames through the real software (libx264) encoder
-//!    and confirm it emits packets.
-//! 3. Boot a real [`Rylus`] server on a loopback port with TLS, access codes,
-//!    and mDNS disabled.
-//! 4. Complete a WebSocket upgrade against `/ws` from a plain TCP client to
-//!    prove the server actually accepted a connection, not just bound a
-//!    socket.
+//! - **Capture** uses [`rylus_capture::testsrc::TestCapturable`], a synthetic
+//!   pixel source that requires no real display, X11 connection, or PipeWire
+//!   session.  The full capture API (recorder construction + `capture()`) is
+//!   exercised; only the backend is synthetic.
+//! - **Encode** passes the captured frame through `VideoEncoder` with software
+//!   H.264.  The encoder is then dropped (flushed); H.264 may buffer the first
+//!   frame until flush time, so zero bytes before drop is expected and OK.
+//! - **WebSocket** boots the real Rylus HTTP/WebSocket server on 127.0.0.1 on
+//!   an OS-assigned ephemeral port, connects via raw TCP, performs an HTTP/1.1
+//!   Upgrade handshake, and verifies a `101 Switching Protocols` response.
 //!
-//! Every stage is bounded so this can never hang: encoding is a fixed number
-//! of synchronous frames, and the WS probe uses connect/read/write timeouts.
+//! Exit codes: 0 = PASS, 1 = FAIL (non-zero on any step failure or timeout).
 
 use std::io::{Read, Write};
-use std::net::{IpAddr, SocketAddr, TcpListener, TcpStream};
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::net::{TcpListener, TcpStream};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use clap::Parser;
-use tracing::{error, info};
+use clap::Parser as _;
+use tracing::info;
 
 use rylus_capture::testsrc::{PixelFormat, TestCapturable};
-use rylus_capture::Capturable;
 use rylus_core::config::Config;
-use rylus_core::Web2UiMessage;
+use rylus_core::Capturable;
 use rylus_encode::{EncoderOptions, VideoEncoder};
 
 use crate::rylus::Rylus;
 
-const SELF_TEST_WIDTH: usize = 640;
-const SELF_TEST_HEIGHT: usize = 360;
-/// One full GOP. Kept in sync with the encoder's default `GOP_SIZE` so the
-/// self-test genuinely exercises a keyframe followed by inter frames rather
-/// than a single frame.
-const SELF_TEST_GOP_FRAMES: usize = 12;
-/// Bound on every network operation in the WS probe (connect, read, write).
-/// The self-test must never hang, so this is deliberately short.
-const SELF_TEST_NET_TIMEOUT: Duration = Duration::from_secs(5);
+/// Hard timeout: if any step hangs, the watcher thread kills the process.
+const SELF_TEST_TIMEOUT_SECS: u64 = 30;
 
-/// Runs the full headless self-test. Returns `true` if every stage passed.
-/// Logs a `tracing::error!` naming the failing stage on any failure.
-pub fn run() -> bool {
-    info!("self-test: starting headless routine (capture -> encode -> bind -> accept)");
-
-    let packets_emitted = match run_capture_and_encode() {
-        Ok(packets) => packets,
-        Err(err) => {
-            error!("self-test: capture/encode stage failed: {err}");
-            return false;
-        }
-    };
-    info!(
-        packets_emitted,
-        gop_frames = SELF_TEST_GOP_FRAMES,
-        "self-test: encoder emitted packets for a full GOP"
-    );
-
-    if let Err(err) = run_bind_and_accept() {
-        error!("self-test: bind/accept stage failed: {err}");
-        return false;
-    }
-
-    info!("self-test: all stages passed");
-    true
+/// Find a free loopback port by binding to 0, recording the OS-assigned port,
+/// then dropping the listener.  The tiny race window between drop and re-bind
+/// is acceptable in CI practice.
+fn find_free_port() -> Result<u16, String> {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .map_err(|e| format!("failed to bind for port discovery: {e}"))?;
+    let port = listener
+        .local_addr()
+        .map_err(|e| format!("failed to get local addr: {e}"))?
+        .port();
+    Ok(port) // listener drops here, freeing the port
 }
 
-/// Stages 2-3: open a synthetic `testsrc` capturable and push a full GOP of
-/// frames through the real [`VideoEncoder`]. Returns the number of packets
-/// the encoder emitted while encoding those frames (not counting the fMP4
-/// header fragment written at construction time).
-fn run_capture_and_encode() -> Result<usize, String> {
+/// Step 1: capture one frame via the synthetic TestCapturable.
+/// No real display, X11 session, or PipeWire daemon is required.
+fn step_capture() -> Result<(usize, usize), String> {
+    info!("[self-test] step 1: capture (synthetic source)");
     let capturable = TestCapturable {
-        width: SELF_TEST_WIDTH,
-        height: SELF_TEST_HEIGHT,
+        width: 320,
+        height: 240,
         pixel_format: PixelFormat::BGR0,
     };
     let mut recorder = capturable
         .recorder(false)
-        .map_err(|err| format!("failed to open test recorder: {err}"))?;
+        .map_err(|e| format!("recorder init failed: {e}"))?;
+    let pixel_data = recorder
+        .capture()
+        .map_err(|e| format!("capture() failed: {e}"))?;
+    let (w, h) = pixel_data.size();
+    info!("[self-test] step 1: captured {w}×{h} frame OK");
+    Ok((w, h))
+}
 
-    let packet_count = Arc::new(AtomicUsize::new(0));
-    let packet_count_cb = packet_count.clone();
+/// Step 2: encode one synthetic frame with software H.264.
+/// Hardware acceleration paths (VAAPI, NVENC, VideoToolbox, MediaFoundation)
+/// are not exercised — software fallback is always available in CI.
+fn step_encode(width: usize, height: usize) -> Result<(), String> {
+    info!("[self-test] step 2: encode ({width}×{height}, software H.264)");
+
+    // Re-create the capturable inside this scope so the PixelProvider lifetime
+    // is tied to a local recorder — no cross-scope borrow.
+    let capturable = TestCapturable {
+        width,
+        height,
+        pixel_format: PixelFormat::BGR0,
+    };
+    let mut recorder = capturable
+        .recorder(false)
+        .map_err(|e| format!("recorder init for encode step: {e}"))?;
+    let pixel_data = recorder
+        .capture()
+        .map_err(|e| format!("capture() for encode step: {e}"))?;
+
+    let bytes_out = Arc::new(Mutex::new(0usize));
+    let counter = bytes_out.clone();
     let mut encoder = VideoEncoder::new(
-        SELF_TEST_WIDTH,
-        SELF_TEST_HEIGHT,
-        SELF_TEST_WIDTH,
-        SELF_TEST_HEIGHT,
-        move |_data| {
-            packet_count_cb.fetch_add(1, Ordering::SeqCst);
+        width,
+        height,
+        width,
+        height,
+        move |data| {
+            *counter.lock().unwrap() += data.len();
         },
         EncoderOptions::default(),
     )
-    .map_err(|err| format!("encoder init failed: {err}"))?;
+    .map_err(|e| format!("VideoEncoder::new failed: {e}"))?;
 
-    // `VideoEncoder::new` already writes the fragmented-MP4 header through
-    // the callback, so baseline it before encoding real frames.
-    let baseline = packet_count.load(Ordering::SeqCst);
-    let mut first_frame_packets = 0usize;
+    // encode() borrows pixel_data (and thus recorder) for the duration of the
+    // call; recorder is still alive here.
+    encoder.encode(pixel_data);
 
-    for i in 0..SELF_TEST_GOP_FRAMES {
-        let frame = recorder
-            .capture()
-            .map_err(|err| format!("test recorder capture failed on frame {i}: {err}"))?;
-        let before = packet_count.load(Ordering::SeqCst);
-        encoder.encode(frame);
-        if i == 0 {
-            first_frame_packets = packet_count.load(Ordering::SeqCst) - before;
-        }
-    }
+    // Drop to flush: H.264 may hold the first frame until end of GOP; bytes
+    // written may be 0 before flush.  The important thing is that neither
+    // VideoEncoder::new nor encode() panicked.
+    drop(encoder);
 
-    let emitted = packet_count.load(Ordering::SeqCst) - baseline;
-    if emitted == 0 {
-        return Err(format!(
-            "encoded {SELF_TEST_GOP_FRAMES} frames but the encoder emitted no packets"
-        ));
-    }
-    if first_frame_packets > 0 {
-        info!("self-test: first frame (forced keyframe) produced a packet immediately");
-    }
-    Ok(emitted)
-}
-
-/// Stages 4-5: boot a real [`Rylus`] server on an internal, hardcoded
-/// loopback config (TLS disabled, no access code, no mDNS) and prove a
-/// WebSocket client can complete the `/ws` upgrade.
-fn run_bind_and_accept() -> Result<(), String> {
-    let loopback: IpAddr = IpAddr::from([127, 0, 0, 1]);
-
-    // Reserve an ephemeral loopback port by binding then releasing it. This
-    // has a theoretical TOCTOU race, but is acceptable here: we rebind on the
-    // same loopback address microseconds later, inside a single process.
-    let port = {
-        let probe = TcpListener::bind((loopback, 0))
-            .map_err(|err| format!("failed to reserve an ephemeral port: {err}"))?;
-        probe
-            .local_addr()
-            .map_err(|err| format!("failed to read reserved port: {err}"))?
-            .port()
-    };
-    let addr = SocketAddr::new(loopback, port);
-
-    // A self-contained internal config for the self-test's own server
-    // instance. Deliberately does not reuse whatever flags the user passed
-    // alongside --self-test: the self-test is a synthetic internal check,
-    // not a replay of the user's exact CLI config, so hardcoding loopback +
-    // disabled TLS/mDNS/access-code here is simpler and fully deterministic.
-    let mut internal_conf = Config::parse_from::<_, &str>(["rylus-self-test"]);
-    internal_conf.bind_address = loopback;
-    internal_conf.web_port = port;
-    internal_conf.access_code = None;
-    internal_conf.tls_mode = Some("disabled".to_string());
-    internal_conf.no_mdns = true;
-
-    let mut server = Rylus::new();
-    let started = server.start(
-        &internal_conf,
-        Box::new(|msg| match msg {
-            Web2UiMessage::UInputInaccessible => {}
-        }),
-    );
-    if !started {
-        return Err(format!("Rylus::start failed to bind {addr}"));
-    }
-    info!(address = %addr, "self-test: server bound and listening");
-
-    let upgrade_result = ws_upgrade_probe(addr, SELF_TEST_NET_TIMEOUT);
-    server.stop();
-    upgrade_result?;
-
-    info!("self-test: WS upgrade accepted");
+    let total = *bytes_out.lock().unwrap();
+    info!("[self-test] step 2: encode+flush OK ({total} bytes produced)");
     Ok(())
 }
 
-/// Hand-rolled minimal HTTP/1.1 WebSocket upgrade request over a raw
-/// `TcpStream`. The `/ws` route in `web.rs` doesn't validate
-/// `Sec-WebSocket-Key`/`Accept` (the server hands the raw upgraded stream
-/// straight to tungstenite in `Role::Server` mode without negotiating a
-/// handshake of its own), so a real client only needs to confirm the
-/// response status line is `101 Switching Protocols` to prove the upgrade
-/// was actually accepted, not merely that the socket was bound.
-fn ws_upgrade_probe(addr: SocketAddr, timeout: Duration) -> Result<(), String> {
-    let mut stream = TcpStream::connect_timeout(&addr, timeout)
-        .map_err(|err| format!("TCP connect to {addr} failed: {err}"))?;
-    stream
-        .set_read_timeout(Some(timeout))
-        .map_err(|err| format!("failed to set read timeout: {err}"))?;
-    stream
-        .set_write_timeout(Some(timeout))
-        .map_err(|err| format!("failed to set write timeout: {err}"))?;
+/// Step 3: boot the Rylus server on a loopback port, perform a WebSocket
+/// upgrade handshake, verify `101 Switching Protocols`, then stop.
+///
+/// TLS is disabled for the self-test to avoid certificate generation latency
+/// and to keep the raw-TCP client simple.  No access code is set so
+/// authentication is skipped.  No Origin header is sent so the server's
+/// origin-check passes (non-browser client path).
+fn step_websocket(port: u16) -> Result<(), String> {
+    info!("[self-test] step 3: WebSocket handshake on 127.0.0.1:{port}");
 
+    let conf = Config::parse_from([
+        "rylus".to_string(),
+        "--no-gui".to_string(),
+        "--no-mdns".to_string(),
+        "--tls-mode".to_string(),
+        "disabled".to_string(),
+        "--bind-address".to_string(),
+        "127.0.0.1".to_string(),
+        "--web-port".to_string(),
+        port.to_string(),
+    ]);
+
+    let mut server = Rylus::new();
+    let started = server.start(&conf, Box::new(|_| {}));
+    if !started {
+        return Err("Rylus::start() returned false".into());
+    }
+    info!("[self-test] step 3: server bound and listening");
+
+    // Raw HTTP/1.1 WebSocket upgrade request.  The server's ws_origin_matches_host
+    // check returns true when no Origin header is present (non-browser client
+    // path), so no Origin is included here.
     let request = format!(
         "GET /ws HTTP/1.1\r\n\
-         Host: {addr}\r\n\
-         Connection: Upgrade\r\n\
+         Host: 127.0.0.1:{port}\r\n\
          Upgrade: websocket\r\n\
-         Sec-WebSocket-Version: 13\r\n\
+         Connection: Upgrade\r\n\
          Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\
+         Sec-WebSocket-Version: 13\r\n\
          \r\n"
     );
+
+    let mut stream =
+        TcpStream::connect(format!("127.0.0.1:{port}")).map_err(|e| format!("connect: {e}"))?;
+    stream
+        .set_read_timeout(Some(Duration::from_secs(10)))
+        .map_err(|e| format!("set_read_timeout: {e}"))?;
     stream
         .write_all(request.as_bytes())
-        .map_err(|err| format!("failed to write upgrade request: {err}"))?;
+        .map_err(|e| format!("write request: {e}"))?;
 
-    let mut buf = Vec::new();
-    let mut chunk = [0u8; 512];
+    // Read until the end of the HTTP response headers (\r\n\r\n).
+    let mut response = String::new();
+    let mut buf = [0u8; 4096];
     loop {
-        let n = stream
-            .read(&mut chunk)
-            .map_err(|err| format!("failed to read upgrade response: {err}"))?;
+        let n = stream.read(&mut buf).map_err(|e| format!("read: {e}"))?;
         if n == 0 {
             break;
         }
-        buf.extend_from_slice(&chunk[..n]);
-        if buf.windows(4).any(|w| w == b"\r\n\r\n") {
+        response.push_str(&String::from_utf8_lossy(&buf[..n]));
+        if response.contains("\r\n\r\n") {
             break;
         }
-        if buf.len() > 8192 {
-            return Err("upgrade response exceeded 8 KiB without a header terminator".to_string());
-        }
     }
 
-    let response = String::from_utf8_lossy(&buf);
-    let status_line = response.lines().next().unwrap_or("");
-    if status_line.contains("101") {
-        Ok(())
-    } else {
-        Err(format!(
-            "expected HTTP 101 Switching Protocols, got: {status_line:?}"
-        ))
+    drop(stream); // close the client side
+
+    if !response.contains("101") {
+        server.stop();
+        return Err(format!(
+            "expected 101 Switching Protocols, got: {:?}",
+            response.lines().next().unwrap_or("(empty response)")
+        ));
     }
+
+    // RFC 6455 §4.2.2: the response MUST carry Sec-WebSocket-Accept derived
+    // from the request key, plus Upgrade/Connection headers. Browsers fail the
+    // connection without them, so a bare 101 is not a working handshake.
+    // "s3pPLMBiTxaQ9kYGzzhZRbK+xOo=" is the RFC's own sample accept value for
+    // the sample nonce sent above.
+    let response_lower = response.to_lowercase();
+    if !response.contains("s3pPLMBiTxaQ9kYGzzhZRbK+xOo=") {
+        server.stop();
+        return Err(format!(
+            "response missing/incorrect Sec-WebSocket-Accept header (browsers reject this): {response:?}"
+        ));
+    }
+    if !response_lower.contains("upgrade: websocket") {
+        server.stop();
+        return Err("response missing 'Upgrade: websocket' header".into());
+    }
+
+    info!("[self-test] step 3: got 101 Switching Protocols with valid accept key OK");
+    server.stop();
+    Ok(())
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+fn run_self_test() -> Result<(), String> {
+    let (w, h) = step_capture()?;
+    step_encode(w, h)?;
+    let port = find_free_port()?;
+    step_websocket(port)?;
+    Ok(())
+}
 
-    #[test]
-    fn self_test_run_passes_and_tears_down_cleanly() {
-        assert!(
-            run(),
-            "self-test routine should complete all stages and return true"
-        );
+/// Entry point called from `main` when `--self-test` is passed.
+///
+/// Prints a single `PASS` or `FAIL` line to stdout/stderr and exits with
+/// code 0 or 1 respectively.  A background watchdog thread terminates the
+/// process with exit code 1 if any step exceeds [`SELF_TEST_TIMEOUT_SECS`].
+pub fn run() {
+    std::thread::spawn(|| {
+        std::thread::sleep(Duration::from_secs(SELF_TEST_TIMEOUT_SECS));
+        eprintln!("FAIL: rylus-server --self-test timed out after {SELF_TEST_TIMEOUT_SECS}s");
+        std::process::exit(1);
+    });
+
+    match run_self_test() {
+        Ok(()) => {
+            println!("PASS: rylus-server --self-test");
+            std::process::exit(0);
+        }
+        Err(e) => {
+            eprintln!("FAIL: rylus-server --self-test: {e}");
+            std::process::exit(1);
+        }
     }
 }

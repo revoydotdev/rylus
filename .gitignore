@@ -1,16 +1,37 @@
+# Editor / IDE
 /.vscode
-/.playwright-mcp
+/.idea
+/.zed
+
+# Build output
 /target
 /Rylus
 /node_modules
+
+# Generated TypeScript bundles (built by `npm run build` from ts/*.ts)
+/www/static/lib.js
+/www/static/lib.js.map
+/www/static/sw.js
+/www/static/sw.js.map
+
+# Sourcemaps anywhere
+*.js.map
+
+# Vendored / fetched build dependencies
 /deps/ffmpeg
 /deps/x264
 /deps/dist*
 /deps/nv-codec-headers
 /deps/libva
-*.js
-*.js.map
+
+# Release archives
 *.tar.gz
+
+# Tooling and session artifacts
 .gstack/
-/STATUS.md
 /.studio/
+.playwright-mcp/
+
+# Internal ship-state tracker (carries cert costs, secret names, commands);
+# the public plan lives in ROADMAP.md
+/STATUS.md

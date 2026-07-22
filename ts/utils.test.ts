@@ -3,22 +3,17 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
     calculateConnectionQuality,
     getQualityIndicatorColor,
-    createRttTracker,
     shouldShowOnboarding,
     markOnboardingComplete,
     shouldSeekToLatest,
     ensureToastContainer,
     showToast,
     createOnboardingOverlay,
-    switchTab,
-    initTabNavigation,
-    type TabId,
     applyPressureCurve,
     type PressurePreset,
     type PressureCurveConfig,
     PRESSURE_PRESETS,
     createPalmRejector,
-    createPointerEventBatcher,
 } from './utils';
 
 // ── Connection quality ──────────────────────────────────────────────────────
@@ -70,61 +65,6 @@ describe('getQualityIndicatorColor', () => {
 
     it('returns red for poor quality', () => {
         expect(getQualityIndicatorColor('poor')).toBe('#ff4444');
-    });
-});
-
-// ── RTT tracker ─────────────────────────────────────────────────────────────
-
-describe('createRttTracker', () => {
-    it('returns null RTT before any heartbeat', () => {
-        const tracker = createRttTracker();
-        expect(tracker.getRtt()).toBeNull();
-    });
-
-    it('sendHeartbeat records timestamp', () => {
-        const tracker = createRttTracker();
-        tracker.sendHeartbeat();
-        // Internal state should be set — we just verify no crash
-        expect(tracker.getRtt()).toBeNull(); // RTT still null until response
-    });
-
-    it('measures RTT after simulated round trip', () => {
-        const tracker = createRttTracker();
-        tracker.sendHeartbeat();
-        // Simulate heartbeat response by setting internal state
-        (tracker as any).currentRtt = 42;
-        expect(tracker.getRtt()).toBe(42);
-    });
-
-    it('resets RTT and heartbeat time', () => {
-        const tracker = createRttTracker();
-        tracker.sendHeartbeat();
-        (tracker as any).currentRtt = 100;
-        tracker.reset();
-        expect(tracker.getRtt()).toBeNull();
-        expect((tracker as any).lastHeartbeatTime).toBeNull();
-    });
-
-    it('sendHeartbeat after reset works correctly', () => {
-        const tracker = createRttTracker();
-        tracker.sendHeartbeat();
-        (tracker as any).currentRtt = 50;
-        tracker.reset();
-        tracker.sendHeartbeat();
-        expect((tracker as any).lastHeartbeatTime).not.toBeNull();
-        expect(tracker.getRtt()).toBeNull();
-    });
-
-    it('multiple sendHeartbeat calls update timestamp', () => {
-        vi.useFakeTimers();
-        const tracker = createRttTracker();
-        tracker.sendHeartbeat();
-        const first = (tracker as any).lastHeartbeatTime;
-        vi.advanceTimersByTime(1);
-        tracker.sendHeartbeat();
-        const second = (tracker as any).lastHeartbeatTime;
-        expect(second).toBeGreaterThan(first);
-        vi.useRealTimers();
     });
 });
 
@@ -305,55 +245,6 @@ describe('showToast', () => {
     });
 });
 
-// ── Tab navigation ──────────────────────────────────────────────────────────
-
-describe('initTabNavigation / switchTab', () => {
-    beforeEach(() => {
-        document.body.innerHTML = `
-            <div data-rylus-tab="capture" class="rylus-tab-btn active">Capture</div>
-            <div data-rylus-tab="video" class="rylus-tab-btn">Video</div>
-            <div data-rylus-tab="input" class="rylus-tab-btn">Input</div>
-            <div data-rylus-tab="display" class="rylus-tab-btn">Display</div>
-            <section id="rylus-tab-panel-capture" class="rylus-tab-panel">Capture Panel</section>
-            <section id="rylus-tab-panel-video" class="rylus-tab-panel hide">Video Panel</section>
-            <section id="rylus-tab-panel-input" class="rylus-tab-panel hide">Input Panel</section>
-            <section id="rylus-tab-panel-display" class="rylus-tab-panel hide">Display Panel</section>
-        `;
-    });
-
-    afterEach(() => {
-        document.body.innerHTML = '';
-    });
-
-    it('switchTab hides other panels and shows target', () => {
-        switchTab('video');
-        expect(document.getElementById('rylus-tab-panel-video')!.classList.contains('hide')).toBe(false);
-        expect(document.getElementById('rylus-tab-panel-capture')!.classList.contains('hide')).toBe(true);
-        expect(document.getElementById('rylus-tab-panel-input')!.classList.contains('hide')).toBe(true);
-    });
-
-    it('switchTab updates active button state', () => {
-        switchTab('input');
-        const captureBtn = document.querySelector('[data-rylus-tab="capture"]');
-        const inputBtn = document.querySelector('[data-rylus-tab="input"]');
-        expect(captureBtn!.classList.contains('active')).toBe(false);
-        expect(inputBtn!.classList.contains('active')).toBe(true);
-    });
-
-    it('initTabNavigation sets up click handlers', () => {
-        initTabNavigation();
-        const videoBtn = document.querySelector('[data-rylus-tab="video"]') as HTMLElement;
-        videoBtn.click();
-        expect(document.getElementById('rylus-tab-panel-video')!.classList.contains('hide')).toBe(false);
-        expect(document.getElementById('rylus-tab-panel-capture')!.classList.contains('hide')).toBe(true);
-    });
-
-    it('initTabNavigation does not crash with no tab elements', () => {
-        document.body.innerHTML = '<div></div>';
-        expect(() => initTabNavigation()).not.toThrow();
-    });
-});
-
 describe('applyPressureCurve', () => {
     it('linear preset passes pressure through unchanged', () => {
         const config: PressureCurveConfig = { preset: 'linear', controlPoint: { x: 0.5, y: 0.5 } };
@@ -471,78 +362,4 @@ describe('createPalmRejector', () => {
         expect(rejector.shouldRejectTouch()).toBe(false);
     });
 });
-
-describe('createPointerEventBatcher', () => {
-    beforeEach(() => {
-        vi.useFakeTimers();
-    });
-
-    afterEach(() => {
-        vi.useRealTimers();
-    });
-
-    it('accumulates events without sending immediately', () => {
-        const sent: string[] = [];
-        const batcher = createPointerEventBatcher((data) => sent.push(data));
-        batcher.add({ PointerEvent: { x: 1 } });
-        expect(sent.length).toBe(0);
-    });
-
-    it('flushes batched events after timeout', () => {
-        const sent: string[] = [];
-        const batcher = createPointerEventBatcher((data) => sent.push(data));
-        batcher.add({ PointerEvent: { x: 1 } });
-        batcher.add({ PointerEvent: { x: 2 } });
-        vi.advanceTimersByTime(17);
-        expect(sent.length).toBe(1);
-        const parsed = JSON.parse(sent[0]);
-        expect(parsed.PointerEvents).toHaveLength(2);
-    });
-
-    it('sends empty batch on flush with no events', () => {
-        const sent: string[] = [];
-        const batcher = createPointerEventBatcher((data) => sent.push(data));
-        batcher.flush();
-        expect(sent.length).toBe(0);
-    });
-
-    it('flush sends accumulated events immediately', () => {
-        const sent: string[] = [];
-        const batcher = createPointerEventBatcher((data) => sent.push(data));
-        batcher.add({ PointerEvent: { x: 1 } });
-        batcher.flush();
-        expect(sent.length).toBe(1);
-        const parsed = JSON.parse(sent[0]);
-        expect(parsed.PointerEvents).toHaveLength(1);
-    });
-
-    it('flush clears the batch so next flush is empty', () => {
-        const sent: string[] = [];
-        const batcher = createPointerEventBatcher((data) => sent.push(data));
-        batcher.add({ PointerEvent: { x: 1 } });
-        batcher.flush();
-        batcher.flush();
-        expect(sent.length).toBe(1);
-    });
-
-    it('starts new batch after flush', () => {
-        const sent: string[] = [];
-        const batcher = createPointerEventBatcher((data) => sent.push(data));
-        batcher.add({ PointerEvent: { x: 1 } });
-        batcher.flush();
-        batcher.add({ PointerEvent: { x: 2 } });
-        vi.advanceTimersByTime(17);
-        expect(sent.length).toBe(2);
-    });
-
-    it('uses PointerEvents key matching protocol format', () => {
-        const sent: string[] = [];
-        const batcher = createPointerEventBatcher((data) => sent.push(data));
-        batcher.add({ event_type: 'pointermove', x: 0.5, y: 0.5 });
-        vi.advanceTimersByTime(17);
-        const parsed = JSON.parse(sent[0]);
-        expect('PointerEvents' in parsed).toBe(true);
-    });
-});
-
 
