@@ -35,3 +35,7 @@
 # Internal ship-state tracker (carries cert costs, secret names, commands);
 # the public plan lives in ROADMAP.md
 /STATUS.md
+
+# aswarm per-machine runtime state (never tracked)
+.agents/governance/
+.agents/locks/
