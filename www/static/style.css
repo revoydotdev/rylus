@@ -751,3 +751,20 @@ body.auth-screen {
     background: var(--rylus-accent-strong-hover);
     border-color: var(--rylus-accent-strong-hover);
 }
+
+.rylus-onboarding-btn {
+    padding: 0.5em 2em;
+    border: none;
+    border-radius: var(--rylus-radius-md);
+    background: var(--rylus-accent-strong);
+    color: #ffffff;
+    font: inherit;
+    font-size: 1em;
+    cursor: pointer;
+    transition: background var(--rylus-transition);
+}
+
+.rylus-onboarding-btn:hover,
+.rylus-onboarding-btn:focus-visible {
+    background: var(--rylus-accent-strong-hover);
+}

@@ -40,14 +40,23 @@ export function createOnboardingOverlay(): HTMLElement | null {
 
     const card = document.createElement('div');
     card.style.cssText = 'background:#fff;color:#111;border-radius:12px;padding:2em;max-width:400px;width:90%;text-align:center;';
+    // The overlay is inserted directly into <body>, outside the page's
+    // landmarks (<main>/<aside>). role="dialog" + aria-modal makes it its
+    // own accessible region instead of stray unlandmarked content.
+    card.setAttribute('role', 'dialog');
+    card.setAttribute('aria-modal', 'true');
 
     const title = document.createElement('h2');
+    title.id = 'rylus-onboarding-title';
     title.style.margin = '0 0 0.5em';
     card.appendChild(title);
+    card.setAttribute('aria-labelledby', title.id);
 
     const body = document.createElement('p');
+    body.id = 'rylus-onboarding-body';
     body.style.margin = '0 0 1.5em';
     card.appendChild(body);
+    card.setAttribute('aria-describedby', body.id);
 
     const indicators = document.createElement('div');
     indicators.style.cssText = 'display:flex;gap:8px;justify-content:center;margin-bottom:1.5em;';
@@ -80,7 +89,7 @@ export function createOnboardingOverlay(): HTMLElement | null {
             btn.textContent = 'Done';
             btn.onclick = () => { markOnboardingComplete(); overlay.remove(); };
         }
-        btn.style.cssText = 'padding:0.5em 2em;border:none;border-radius:6px;background:#00aaff;color:#fff;font-size:1em;cursor:pointer;';
+        btn.className = 'rylus-onboarding-btn';
         btnContainer.appendChild(btn);
     }
 
