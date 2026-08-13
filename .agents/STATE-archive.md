@@ -124,3 +124,49 @@ open each worktree, check whether the worker's diff is sound, and either land
 it via a fresh `concern/*` branch + `integrate.sh` or discard it, then
 `git worktree remove` + `git branch -d` to clear the residue. Until that
 happens, every subsequent tick will just repeat this same no-op RECOVER.
+
+<!-- rotated  : 1 entries + 0 intlog lines -->
+## 2026-07-20 tick — M1 candidate-complete (2 concerns landed, self-heal closed the rest)
+
+CLEAN preflight, clean worktree-check (no orphans/concern branches/salvage).
+No operator directives, not paused. `ledger.py status` showed 10/15 M1 todos
+done (not the milestone's first NORMAL tick, so no gate-decomposition).
+Self-heal-check against real artifact commands closed 3 todos for free before
+claiming anything: `M1.P9.S2.T1` (self-test already exits 0), `M1.P1.S1.T3`
+(integration test already exists and passes), `M1.P9.S1.T1` (workspace tests
+already green) — down to 2 genuinely unclaimed todos.
+
+Dispatched 2 disjoint sonnet workers:
+- `concern/ci-selftest-step` → `8b198c5`, integrated `9e3f8f0` — added a
+  `Self-test` step (`cargo run -q -p rylus-server -- --self-test`) to the CI
+  quality job — closes `M1.P1.S2.T1`.
+- `concern/gui-clippy-f32` → `8dc5a49`, integrated `6f0389d` — `cargo clippy
+  --all-targets -- -D warnings` was failing with 20 errors in
+  `crates/rylus-gui/src/lib.rs` (`egui::Stroke::new(1.0, ...)` losing f32
+  inference); suffixed the 20 literals `1.0_f32` — closes `M1.P9.S1.T2`
+  (M1G2).
+
+Both worktrees were clean before integration — removed the worktree
+registrations and ran `scripts/integrate.sh` for each, gated on the real
+ROADMAP artifact command. **Gotcha hit and recorded**: the first
+`integrate.sh` attempt on `concern/ci-selftest-step` failed transiently
+("cannot rebase: you have unstaged changes") because the 3 self-healed
+`ledger.py done` writes were still uncommitted on `integration` at that
+point; the script's failure path ran `git reset --hard` on the concern
+branch, which — since the uncommitted `ledger.jsonl` changes had carried
+over via `git checkout` — wiped those 3 self-heal records. Caught this by
+re-checking `ledger.py status` after integrating rather than trusting the
+running count, re-ran the 3 self-heal-checks (all PASS again, no rebuild
+needed), and both original concerns integrated cleanly on retry. Lesson:
+commit or stash ledger.jsonl before invoking `integrate.sh`, since its
+failure path hard-resets the branch it checked out.
+
+Final state: `ledger.py check --rerun` → PASS (15/15 done todos,
+structural+rerun) — **M1 is 15/15 todos done**. Explicitly re-verified all
+5 milestone gates on the integrated tree: M1G1 `cargo test --workspace
+--locked` PASS, M1G2 `cargo clippy --all-targets -- -D warnings` PASS, M1G3
+`cargo fmt -- --check` PASS (no diff), M1G4 `--self-test` exits 0 PASS, M1G5
+`docs/PROTOCOL.md` exists and covers `HeartbeatAck` PASS. All todos done and
+all gates green → M1 candidate-complete. Flipping `MILESTONE_PHASE` to
+`AUDIT` per protocol; **not** auditing this tick — that's the next tick's
+sole job.

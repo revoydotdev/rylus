@@ -7,6 +7,100 @@
 - MILESTONE_PHASE: NORMAL
 - CURRENT_MILESTONE: M3
 
+## 2026-08-13 tick — NORMAL: M3 gate decomposition + 3 dispatched concerns
+
+First NORMAL tick of M3 (`ledger.py status` showed 0 done, `next --milestone
+M3` showed 6 unclaimed). Decomposed M3G1-M3G4 into explicit gate-closing
+todos under a new `M3.P9.S1`/`M3.P9.S2` section in ROADMAP.md, mirroring the
+M1.P9/M2.P9 pattern: M3.P9.S1.T1-2 (icon asset, entitlements) and
+M3.P9.S2.T1-2 (universal CI build, notarization wiring). `ledger.py next
+--milestone M3` now shows 10 unclaimed todos (was 6).
+
+Self-heal pass on all 10 unclaimed M3 todos: all 10 NEEDS-WORK (genuinely
+unbuilt, greenfield packaging — none recorded for free).
+
+Noted but not yet acted on: `M3.P3.S1.T2`'s artifact command in ROADMAP.md
+(`grep -qi 'dmg' Readme.md`) references `Readme.md` but the real file is
+`README.md` — wrong case, will never match on this case-sensitive filesystem.
+Left the roadmap prose untouched (out of scope for concerns not claimed this
+tick) but flagging here so a future tick fixes the command instead of
+re-discovering the false NEEDS-WORK.
+
+CLAIMED this tick (3 disjoint concerns, dispatched to sonnet workers):
+- CLAIMED `M3.P1.S1.T1` + `M3.P9.S1.T1`/M3G1 — concern `macos-icon-icns` —
+  generate `packaging/macos/icon.icns` from `packaging/icons/rylus.svg`
+  (touches `packaging/macos/icon.icns`, `scripts/gen-icons.sh`)
+- CLAIMED `M3.P1.S1.T2` — concern `macos-bundle-metadata` — enrich
+  `[package.metadata.bundle]` in `crates/rylus-server/Cargo.toml` (touches
+  only that file)
+- CLAIMED `M3.P2.S1.T1` + `M3.P9.S1.T2`/M3G2 — concern `macos-entitlements`
+  — add `packaging/macos/entitlements.plist` (touches only that new file)
+
+Deliberately left unclaimed this tick: `M3.P2.S1.T2` + `M3.P3.S1.T1`
+(both touch `.github/workflows/build.yml` — reserved for a future tick to
+avoid intra-tick file contention with each other), `M3.P3.S1.T1` proper is
+also prereq-gated per the roadmap's own note (Apple Developer cert not yet
+provisioned), and `M3.P3.S1.T2` (docs) has the Readme.md casing bug above.
+
+All 3 workers PASSED, independently re-verified (diff read, checks re-run
+myself on the integrated tree, not trusted from self-report) before
+recording done:
+
+- DONE — `M3.P1.S1.T1` + `M3.P9.S1.T1`/M3G1 (concern: `macos-icon-icns`) —
+  integrated at `ba5e949`. Root cause: `scripts/gen-icons.sh`'s icns block
+  was gated on `iconutil` (macOS-only, absent on this Linux box), so it
+  silently no-op'd with zero error. Fix: added a Linux-capable fallback —
+  `rsvg-convert` renders each size directly from `packaging/icons/rylus.svg`
+  (not upscaled from existing PNGs), an inline python3 assembler builds the
+  ICNS container per the documented OSType table (cross-checked against the
+  rust-icns crate + the Apple Icon Image format reference before writing
+  bytes, not from memory). Re-verified myself: `test -f
+  packaging/macos/icon.icns` exit 0, magic bytes `icns` at offset 0, all 10
+  OSType entries parse as well-formed length-framed PNG chunks (independent
+  python3 parse, not just trusting the worker's `file` output).
+- DONE — `M3.P2.S1.T1` + `M3.P9.S1.T2`/M3G2 (concern: `macos-entitlements`)
+  — integrated at `6ffa467`. Investigated whether
+  `com.apple.security.cs.disable-library-validation` is genuinely needed
+  (TODOS.md says avoid unless required): traced `ffmpeg-sys-next`'s build.rs
+  — no `static`/`build` feature enabled, so it links dynamically via
+  pkg-config against the Homebrew-provisioned FFmpeg on the self-hosted
+  macOS runner (`build.yml` never runs `brew install ffmpeg` itself, i.e.
+  those dylibs are pre-existing and not signed with our Team ID) — hardened
+  runtime Library Validation would refuse to load them, so the exception is
+  real, not precautionary. `allow-jit` genuinely omitted (grepped
+  `Cargo.lock` for JIT-capable crates, none found; pure AOT Rust per AX-5).
+  Re-verified myself: `test -f packaging/macos/entitlements.plist` exit 0,
+  well-formed XML (independent `xml.dom.minidom` parse).
+- DONE — `M3.P1.S1.T2` (concern: `macos-bundle-metadata`) — integrated at
+  `a35e240`. Enriched `[package.metadata.bundle]` (category, copyright,
+  descriptions, icon path, `osx_minimum_system_version`). Verified the
+  actual `cargo-bundle` manifest schema against its real docs (not vendored
+  in this repo, not installed in this sandbox) before writing keys — the
+  real, documented mechanism for injecting arbitrary Info.plist keys is
+  `osx_info_plist_exts` (a list of file paths whose bare `<key>/<value>`
+  contents get appended into the generated Info.plist), wired to a new
+  `packaging/macos/info-plist-extras.plist` carrying the real
+  `NSScreenCaptureUsageDescription`/`NSAppleEventsUsageDescription` strings
+  — not a decorative comment standing in for missing wiring. Re-verified
+  myself: `grep -q NSScreenCaptureUsageDescription
+  crates/rylus-server/Cargo.toml` exit 0, `cargo metadata --no-deps
+  --format-version=1 -q` exit 0 (Cargo.toml still parses cleanly with the
+  new keys).
+
+2 learnings logged (`macOS icns`/iconutil-Linux-silent-noop trap,
+`cargo-bundle osx_info_plist_exts` real mechanism) — both non-obvious and
+likely to recur for the M4 Windows MSI work.
+
+No a2a-requests were needed this tick (0 pending at both the pre-dispatch
+and post-dispatch polls) — all 3 workers resolved their own research
+(iconutil unavailability, cargo-bundle's real schema, FFmpeg linking mode)
+by reading the authoritative source rather than escalating.
+
+`ledger.py next --milestone M3` now shows 5 unclaimed (`M3.P2.S1.T2`,
+`M3.P3.S1.T1`, `M3.P3.S1.T2`, `M3.P9.S2.T1`, `M3.P9.S2.T2`) — M3G3/M3G4 not
+yet closed, so M3 is NOT candidate-complete; CONTROL stays `NORMAL`/`M3`.
+All 3 worktrees destroyed, `concern/*` branches deleted post-merge.
+
 ## 2026-07-22 tick — M2 AUDIT PASS → master promoted, advance to M3 NORMAL
 
 First CLEAN tree since the DIRTY blocker cleared (operator A2A-bus WIP is now
@@ -630,51 +724,6 @@ confirm the flake is actually gone, not just less likely; (b) write the
 missing `M1.P1.S1.T3` integration test for real (invoke the self-test path,
 assert exit and no leaked threads/devices), then re-verify the artifact
 command against a nonzero passed-test count, not just exit code 0.
-
-## 2026-07-20 tick — M1 candidate-complete (2 concerns landed, self-heal closed the rest)
-
-CLEAN preflight, clean worktree-check (no orphans/concern branches/salvage).
-No operator directives, not paused. `ledger.py status` showed 10/15 M1 todos
-done (not the milestone's first NORMAL tick, so no gate-decomposition).
-Self-heal-check against real artifact commands closed 3 todos for free before
-claiming anything: `M1.P9.S2.T1` (self-test already exits 0), `M1.P1.S1.T3`
-(integration test already exists and passes), `M1.P9.S1.T1` (workspace tests
-already green) — down to 2 genuinely unclaimed todos.
-
-Dispatched 2 disjoint sonnet workers:
-- `concern/ci-selftest-step` → `8b198c5`, integrated `9e3f8f0` — added a
-  `Self-test` step (`cargo run -q -p rylus-server -- --self-test`) to the CI
-  quality job — closes `M1.P1.S2.T1`.
-- `concern/gui-clippy-f32` → `8dc5a49`, integrated `6f0389d` — `cargo clippy
-  --all-targets -- -D warnings` was failing with 20 errors in
-  `crates/rylus-gui/src/lib.rs` (`egui::Stroke::new(1.0, ...)` losing f32
-  inference); suffixed the 20 literals `1.0_f32` — closes `M1.P9.S1.T2`
-  (M1G2).
-
-Both worktrees were clean before integration — removed the worktree
-registrations and ran `scripts/integrate.sh` for each, gated on the real
-ROADMAP artifact command. **Gotcha hit and recorded**: the first
-`integrate.sh` attempt on `concern/ci-selftest-step` failed transiently
-("cannot rebase: you have unstaged changes") because the 3 self-healed
-`ledger.py done` writes were still uncommitted on `integration` at that
-point; the script's failure path ran `git reset --hard` on the concern
-branch, which — since the uncommitted `ledger.jsonl` changes had carried
-over via `git checkout` — wiped those 3 self-heal records. Caught this by
-re-checking `ledger.py status` after integrating rather than trusting the
-running count, re-ran the 3 self-heal-checks (all PASS again, no rebuild
-needed), and both original concerns integrated cleanly on retry. Lesson:
-commit or stash ledger.jsonl before invoking `integrate.sh`, since its
-failure path hard-resets the branch it checked out.
-
-Final state: `ledger.py check --rerun` → PASS (15/15 done todos,
-structural+rerun) — **M1 is 15/15 todos done**. Explicitly re-verified all
-5 milestone gates on the integrated tree: M1G1 `cargo test --workspace
---locked` PASS, M1G2 `cargo clippy --all-targets -- -D warnings` PASS, M1G3
-`cargo fmt -- --check` PASS (no diff), M1G4 `--self-test` exits 0 PASS, M1G5
-`docs/PROTOCOL.md` exists and covers `HeartbeatAck` PASS. All todos done and
-all gates green → M1 candidate-complete. Flipping `MILESTONE_PHASE` to
-`AUDIT` per protocol; **not** auditing this tick — that's the next tick's
-sole job.
 
 - 2026-07-20T22:35:30Z — integrated `concern/self-test-flag` into `integration` at `024080e`
 - 2026-07-20T22:37:52Z — integrated `concern/protocol-doc` into `integration` at `f498d1c`

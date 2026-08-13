@@ -166,6 +166,16 @@ buildable now; the signing CI steps land once the cert is provisioned (AX-8).
 - **M3G3** — CI builds a universal (arm64 + x86_64) binary. → *Check:* `grep -q 'aarch64-apple-darwin' .github/workflows/build.yml`
 - **M3G4** — Notarization step wired. → *Check:* `grep -q 'notarytool' .github/workflows/build.yml`
 
+### M3.P9.S1 — Packaging asset gates
+
+- **`M3.P9.S1.T1`** — Close M3G1: macOS icon asset present. → *Artifact:* `test -f packaging/macos/icon.icns` · *Concern:* packaging
+- **`M3.P9.S1.T2`** — Close M3G2: entitlements present. → *Artifact:* `test -f packaging/macos/entitlements.plist` · *Concern:* packaging
+
+### M3.P9.S2 — CI & release closure
+
+- **`M3.P9.S2.T1`** — Close M3G3: CI builds a universal (arm64 + x86_64) binary. → *Artifact:* `grep -q 'aarch64-apple-darwin' .github/workflows/build.yml` · *Concern:* ci
+- **`M3.P9.S2.T2`** — Close M3G4: notarization step wired. → *Artifact:* `grep -q 'notarytool' .github/workflows/build.yml` · *Concern:* packaging
+
 ---
 
 # M4 — Signed Windows MSI
