@@ -4,8 +4,79 @@
 > Status keys: CLAIMED · IN_PROGRESS · DONE · BLOCKED · GATE-FAILED
 
 <!-- CONTROL: machine-read; supervisor updates these two lines -->
-- MILESTONE_PHASE: REMEDIATION
+- MILESTONE_PHASE: AUDIT
 - CURRENT_MILESTONE: M3
+
+## 2026-08-13 tick — M3 REMEDIATION: both actionable findings closed, phase → AUDIT
+
+Preflight CLEAN. Worked the prior AUDIT's three itemized findings; finding 1
+stays operator-gated, findings 2 and 3 are fixed with fresh evidence.
+
+**Finding 1 — BLOCKED-PENDING-OPERATOR, not re-attempted.** Apple Developer
+enrollment + the five signing secrets on `revoydotdev/rylus`. Open as
+a2a-request `4f1be84965a3` (type `resource`). No new information since it was
+posted, so per the no-relitigation rule it was not retried and not re-posted.
+
+**Finding 2 — FIXED** (`07098aa`, concern `doc-m3-apple-drift`). Root cause:
+docs described the macOS signing/notarization CI as unwritten while the code
+existed and was wired — the drift was one-directional (doc behind code), so the
+fix was the doc, not `build.yml`. `TODOS.md` §2 "Status today" now states the
+real posture: universal `lipo` build + icon + entitlements + codesign +
+`notarytool` + `create-dmg` all exist in `build.yml`, all gated on
+`secrets.APPLE_DEVELOPER_ID_CERT_P12`, therefore inert on every current run and
+still shipping only the unsigned `macos-universal.zip`. Engineering checkboxes
+ticked, `[P]` prerequisites left unchecked (genuinely undone). `ROADMAP.md:139`
+M3 header reworded; M4/M5 AX-8 references left alone (not stale).
+
+**Finding 3a — FIXED** (`1e420d6`, concern `cargo-audit-webbrowser`). Root cause
+was a real vulnerable transitive dep, not a policy gap, so it got a real upgrade
+rather than an `audit.toml` ignore: `webbrowser` 1.2.0 → 1.2.4 via
+`cargo update -p webbrowser` (RUSTSEC-2026-0257, Unix `BROWSER` argument
+injection; advisory's own `Solution: Upgrade to >=1.2.2`). `Cargo.lock` only, no
+manifest change. `.cargo/audit.toml` untouched — nothing was suppressed.
+Verified on the integrated tree this tick: `cargo audit` → **exit 0**.
+
+**Finding 3b — FIXED, in two layers** (`22db750` + `bd49712`). The reported
+`ERR_MODULE_NOT_FOUND: playwright` was only the outer layer: `playwright` was
+already declared in `package.json`, `node_modules` simply didn't exist here.
+Provisioning it made the check actually *execute* — and it then failed exit 1 on
+**two genuine axe-core violations that the tooling error had been hiding**.
+Fixed the real defect rather than recording the provisioning fix as the close:
+the failing nodes were not in any `www/` template at all but in runtime-injected
+DOM — `ts/utils.ts` `createOnboardingOverlay()` appends a first-run modal
+straight to `document.body`, giving an unlandmarked `h2`/`p` (axe `region`) and a
+`#00aaff`-on-white button at 2.56:1 (axe `color-contrast`). Fix gave the card
+`role="dialog"`/`aria-modal`/`aria-labelledby` and moved the button to the
+existing `--rylus-accent-strong` (`#0077b3`, 4.9:1) — a DESIGN.md token already
+adopted for this exact AA failure on 2026-07-20, no new color invented.
+Verified on the integrated tree this tick: `npm run a11y` → **exit 0**, 0
+violations across all 3 routes, keyboard-nav 0 failures.
+
+**Evidence (commands run this tick against `integration`).**
+
+| Check | Command | Exit |
+| --- | --- | --- |
+| 3a | `cargo audit` | 0 |
+| 3b | `npm run a11y` | 0 |
+| repo-wide | `python3 scripts/ledger.py check --rerun` | **0 — PASS (38 done todos, structural+rerun)** |
+
+The ledger is green for the first time since the M2 entries went red; that is
+what actually closes findings 3a and 3b, not the individual concern checks.
+
+**Two traps recorded** (`learnings.jsonl`, M3): `self-heal-check.sh` short-circuits
+on an existing ledger row and never runs its `--cmd`, so "already recorded" is
+evidence a row exists and nothing more — it reported skip-DONE for both M2 todos
+while `check --rerun` was red on them. And: a provisioning failure can mask a
+substantive failure of the same check; never record the provisioning fix as the
+close without re-running to a real green.
+
+Not re-logged (already recorded 2026-08-13 16:20, and hit again this tick):
+`integrate.sh`'s failure handler `git reset --hard`s the main worktree, silently
+destroying an unstaged `.agents/ledger.jsonl` edit. Cost one re-record. The rule
+is unchanged — integrate on a committed-clean tree, then write the ledger.
+
+Phase → **AUDIT**: every finding is now fixed or explicitly
+BLOCKED-PENDING-OPERATOR.
 
 ## 2026-08-13 tick — M3 AUDIT → **FAIL** (independent verifier); phase set REMEDIATION
 
@@ -599,87 +670,6 @@ M2.P9.S1.T1-3 (Origin test, security doc, cargo audit) and M2.P9.S2.T1-2
 (latency doc, a11y audit). `ledger.py next --milestone M2` now shows 13
 unclaimed todos (was 8). Supervisor dispatch for feature concerns follows
 in this same tick.
-
-## 2026-07-20 tick — AUDIT: PASS, master fast-forwarded to M1
-
-Sole-turn audit, no worker agents dispatched. Independently re-verified all
-of M1 against its 5 gates, VISION.md axioms, and the ADRs, on `integration`
-tip `3196d05` — not a rubber stamp of the prior REMEDIATION tick's
-self-report, and not re-trusting anything the prior AUDIT:FAIL tick already
-checked without re-running it myself.
-
-**Read for context (not re-litigated, just grounding):** `VISION.md` (all 8
-axioms), `docs/adr/ADR-0001..0004`, and the top ~160 lines of this file
-covering the prior AUDIT:FAIL (vacuous `protocol_version_is_three` test) and
-its REMEDIATION (replaced with `protocol_version_matches_docs`).
-
-**Re-ran every gate for real:**
-- `python3 scripts/ledger.py check --rerun` → PASS, 15/15 M1 todos
-  structural+rerun clean.
-- M1G1 `cargo test --workspace --locked` → 0 failed across every crate
-  (rylus-core 89+, rylus-transport 14, rylus-server suites, doc-tests all
-  0/0 as expected).
-- M1G2 `cargo clippy --all-targets -- -D warnings` → exit 0, no warnings.
-- M1G3 `cargo fmt -- --check` → exit 0, no diff.
-- M1G4 `cargo run -q -p rylus-server -- --self-test` → exit 0. Read
-  `crates/rylus-server/src/self_test.rs` end to end: real testsrc capture,
-  real libx264 GOP encode (asserts packets emitted), real loopback bind +
-  hand-rolled HTTP Upgrade request over a raw TcpStream asserting `101` in
-  the response status line. `main.rs:66-68` wires `conf.self_test` to
-  `self_test::run()` + `process::exit`, not a dead flag. TLS is disabled
-  only inside the self-test's own `internal_conf` (`self_test.rs:156`), not
-  the default CLI posture — no ADR-0004 drift.
-- M1G5 `test -f docs/PROTOCOL.md && grep -q HeartbeatAck ...` → PASS. Read
-  `docs/PROTOCOL.md` in full (712 lines): genuinely documents the handshake,
-  Origin check, text/binary framing split, every `MessageInbound`/
-  `MessageOutbound` variant (including the `batched_pointer_events` serde
-  rename, `HelloNack` version-guard, `ClientRtt`, `RequestKeyframe`,
-  `BufferHealth`), heartbeat v3 RTT/jitter classification, and states
-  `PROTOCOL_VERSION = 3` / `MIN_CLIENT_PROTOCOL_VERSION = 2` matching
-  `protocol.rs:7,14` exactly. Explicitly ties itself to AX-1/AX-3/ADR-0003;
-  no alternate-transport language anywhere.
-
-**Independently proved the protocol-doc-drift guard fires — did not trust
-the prior tick's claim.** Scratch-edited `crates/rylus-core/src/protocol.rs`
-line 7 to `PROTOCOL_VERSION: u32 = 4` (uncommitted), ran
-`cargo test -p rylus-core protocol_version --locked`: FAILED with
-`docs/PROTOCOL.md documents PROTOCOL_VERSION = 3, but protocol.rs defines
-PROTOCOL_VERSION = 4 -- update the doc`. Then `git checkout --
-crates/rylus-core/src/protocol.rs` to revert, re-ran the same test: 1
-passed. `git status` confirmed clean before proceeding. The guard is real,
-not vacuous.
-
-**Bench harness — ran the actual regression gate, not just read it.**
-`bash scripts/bench-gate.sh`: baseline 667.94µs (`BASELINE.md`, real
-recorded run with host/FFmpeg version), measured 678.15µs this run, delta
-+1.53%, threshold 15% → PASS. `crates/rylus-encode/benches/encode.rs` drives
-real `VideoEncoder::encode()` over a fixed synthetic BGR0 frame through the
-real libx264 software path — not a stub. `.github/workflows/build.yml`'s
-`quality` job runs `Self-test` and `Encode benchmark regression gate` as
-real steps, and every other job (`build-linux`, `build-linux-alpine`,
-`build-macos`, `build-windows`) declares `needs: quality` — coherent, not
-orphaned.
-
-**No VISION/ADR drift found.** WebSocket-only/LAN-only (AX-3/ADR-0003),
-secure-by-default (AX-6/ADR-0004), pure-Rust workspace boundary
-(AX-5/ADR-0002) all held across everything read this tick.
-
-**Verdict: PASS.** All 5 gates hold for real, ledger re-verifies clean,
-every artifact spot-checked is substantive (not vacuous/stubbed), no
-drift.
-
-**Branch actions taken:** `master` (`bcacb48`) and `integration`
-(`3196d05`) were both confirmed in sync with their respective remotes
-first. `git merge-base --is-ancestor master integration` → true (42 commits
-ahead, clean ff-only path). Ran `git checkout master && git merge --ff-only
-integration` → fast-forwarded cleanly (49 files, no conflicts, no rewrite).
-Pushed with `git push origin master` (normal push, not force) →
-`bcacb48..3196d05 master -> master` succeeded. Switched back to
-`integration` afterward. Did not touch `origin/integration`.
-
-`MILESTONE_PHASE` set to `NORMAL`, `CURRENT_MILESTONE` advanced to `M2`
-(Security review & latency verification) per `ROADMAP.md:82` — the next
-milestone after M1 in the file, not a guess.
 
 - 2026-07-20T22:35:30Z — integrated `concern/self-test-flag` into `integration` at `024080e`
 - 2026-07-20T22:37:52Z — integrated `concern/protocol-doc` into `integration` at `f498d1c`

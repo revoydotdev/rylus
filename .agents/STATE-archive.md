@@ -473,3 +473,85 @@ M1's only blocking finding is now closed. `MILESTONE_PHASE` set to
 `AUDIT`, `CURRENT_MILESTONE` stays `M1` — a future tick performs the
 independent AUDIT; this tick did not self-certify the audit. Did not touch
 `master`/`origin` beyond a normal push to `integration`.
+
+<!-- rotated  : 1 entries + 0 intlog lines -->
+## 2026-07-20 tick — AUDIT: PASS, master fast-forwarded to M1
+
+Sole-turn audit, no worker agents dispatched. Independently re-verified all
+of M1 against its 5 gates, VISION.md axioms, and the ADRs, on `integration`
+tip `3196d05` — not a rubber stamp of the prior REMEDIATION tick's
+self-report, and not re-trusting anything the prior AUDIT:FAIL tick already
+checked without re-running it myself.
+
+**Read for context (not re-litigated, just grounding):** `VISION.md` (all 8
+axioms), `docs/adr/ADR-0001..0004`, and the top ~160 lines of this file
+covering the prior AUDIT:FAIL (vacuous `protocol_version_is_three` test) and
+its REMEDIATION (replaced with `protocol_version_matches_docs`).
+
+**Re-ran every gate for real:**
+- `python3 scripts/ledger.py check --rerun` → PASS, 15/15 M1 todos
+  structural+rerun clean.
+- M1G1 `cargo test --workspace --locked` → 0 failed across every crate
+  (rylus-core 89+, rylus-transport 14, rylus-server suites, doc-tests all
+  0/0 as expected).
+- M1G2 `cargo clippy --all-targets -- -D warnings` → exit 0, no warnings.
+- M1G3 `cargo fmt -- --check` → exit 0, no diff.
+- M1G4 `cargo run -q -p rylus-server -- --self-test` → exit 0. Read
+  `crates/rylus-server/src/self_test.rs` end to end: real testsrc capture,
+  real libx264 GOP encode (asserts packets emitted), real loopback bind +
+  hand-rolled HTTP Upgrade request over a raw TcpStream asserting `101` in
+  the response status line. `main.rs:66-68` wires `conf.self_test` to
+  `self_test::run()` + `process::exit`, not a dead flag. TLS is disabled
+  only inside the self-test's own `internal_conf` (`self_test.rs:156`), not
+  the default CLI posture — no ADR-0004 drift.
+- M1G5 `test -f docs/PROTOCOL.md && grep -q HeartbeatAck ...` → PASS. Read
+  `docs/PROTOCOL.md` in full (712 lines): genuinely documents the handshake,
+  Origin check, text/binary framing split, every `MessageInbound`/
+  `MessageOutbound` variant (including the `batched_pointer_events` serde
+  rename, `HelloNack` version-guard, `ClientRtt`, `RequestKeyframe`,
+  `BufferHealth`), heartbeat v3 RTT/jitter classification, and states
+  `PROTOCOL_VERSION = 3` / `MIN_CLIENT_PROTOCOL_VERSION = 2` matching
+  `protocol.rs:7,14` exactly. Explicitly ties itself to AX-1/AX-3/ADR-0003;
+  no alternate-transport language anywhere.
+
+**Independently proved the protocol-doc-drift guard fires — did not trust
+the prior tick's claim.** Scratch-edited `crates/rylus-core/src/protocol.rs`
+line 7 to `PROTOCOL_VERSION: u32 = 4` (uncommitted), ran
+`cargo test -p rylus-core protocol_version --locked`: FAILED with
+`docs/PROTOCOL.md documents PROTOCOL_VERSION = 3, but protocol.rs defines
+PROTOCOL_VERSION = 4 -- update the doc`. Then `git checkout --
+crates/rylus-core/src/protocol.rs` to revert, re-ran the same test: 1
+passed. `git status` confirmed clean before proceeding. The guard is real,
+not vacuous.
+
+**Bench harness — ran the actual regression gate, not just read it.**
+`bash scripts/bench-gate.sh`: baseline 667.94µs (`BASELINE.md`, real
+recorded run with host/FFmpeg version), measured 678.15µs this run, delta
++1.53%, threshold 15% → PASS. `crates/rylus-encode/benches/encode.rs` drives
+real `VideoEncoder::encode()` over a fixed synthetic BGR0 frame through the
+real libx264 software path — not a stub. `.github/workflows/build.yml`'s
+`quality` job runs `Self-test` and `Encode benchmark regression gate` as
+real steps, and every other job (`build-linux`, `build-linux-alpine`,
+`build-macos`, `build-windows`) declares `needs: quality` — coherent, not
+orphaned.
+
+**No VISION/ADR drift found.** WebSocket-only/LAN-only (AX-3/ADR-0003),
+secure-by-default (AX-6/ADR-0004), pure-Rust workspace boundary
+(AX-5/ADR-0002) all held across everything read this tick.
+
+**Verdict: PASS.** All 5 gates hold for real, ledger re-verifies clean,
+every artifact spot-checked is substantive (not vacuous/stubbed), no
+drift.
+
+**Branch actions taken:** `master` (`bcacb48`) and `integration`
+(`3196d05`) were both confirmed in sync with their respective remotes
+first. `git merge-base --is-ancestor master integration` → true (42 commits
+ahead, clean ff-only path). Ran `git checkout master && git merge --ff-only
+integration` → fast-forwarded cleanly (49 files, no conflicts, no rewrite).
+Pushed with `git push origin master` (normal push, not force) →
+`bcacb48..3196d05 master -> master` succeeded. Switched back to
+`integration` afterward. Did not touch `origin/integration`.
+
+`MILESTONE_PHASE` set to `NORMAL`, `CURRENT_MILESTONE` advanced to `M2`
+(Security review & latency verification) per `ROADMAP.md:82` — the next
+milestone after M1 in the file, not a guess.
