@@ -4,8 +4,105 @@
 > Status keys: CLAIMED · IN_PROGRESS · DONE · BLOCKED · GATE-FAILED
 
 <!-- CONTROL: machine-read; supervisor updates these two lines -->
-- MILESTONE_PHASE: NORMAL
+- MILESTONE_PHASE: AUDIT
 - CURRENT_MILESTONE: M3
+
+## 2026-08-13 tick — NORMAL→AUDIT: M3 notarization CI closes the milestone (1 concern, 10/10 done)
+
+`ledger.py status --milestone M3` 8/10 done, `next --milestone M3` showed 2
+unclaimed: `M3.P3.S1.T1` and `M3.P9.S2.T2`/M3G4 — both close via the SAME
+verify command on the SAME file (`grep -q 'notarytool'
+.github/workflows/build.yml`), so treated as ONE concern, not split.
+
+Read all 4 M3 learnings first (macOS-only-CLI silent-no-op trap;
+cargo-bundle schema from real docs not memory; worktree destroy-before-
+integrate trap; the standalone-ledger-commit invariant) and folded the
+relevant ones into the worker brief.
+
+**The recurring deferral, resolved this tick.** Both todos had been left
+unclaimed on the prior TWO NORMAL ticks with the stated rationale "signing
+CI steps land once the cert is provisioned (AX-8)" (ROADMAP.md M3 header).
+Verified myself before acting: `grep -n AX-8 TODOS.md` → no hit, AX-8
+appears nowhere in TODOS.md. TODOS.md section 2 ("Apple — Notarized macOS
+DMG") already names the exact five secrets to gate on
+(`APPLE_DEVELOPER_ID_CERT_P12`, `APPLE_DEVELOPER_ID_CERT_PASSWORD`,
+`APPLE_ID`, `APPLE_TEAM_ID`, `APPLE_NOTARY_PASSWORD`). The todo text itself
+says the steps are "gated on the Apple secrets" — i.e. authored with `if:`
+guards so the workflow stays valid and green without the cert, executing
+only once the operator provisions it. Conditionally-gated CI steps are a
+standard, well-documented GitHub Actions pattern and do not require the
+cert to exist to be authored. Decision: build it this tick instead of
+deferring a third time. (ROADMAP.md's M3 header prose still says "lands
+once the cert is provisioned" — now stale given this tick's work, but left
+untouched as out of scope for this concern; a future doc pass should update
+it. Same AX-8 phrasing also appears in the M4/M5 headers for Windows
+signing and final release, unrelated to this tick.)
+
+CLAIMED `M3.P3.S1.T1` + `M3.P9.S2.T2`/M3G4 — concern `macos-notarize` —
+touches only `.github/workflows/build.yml`. self-heal-check ran first with
+`--record`: genuinely NEEDS-WORK (verify failed against the pre-change
+tree, exit 3) — no free ledger entry.
+
+Dispatched one sonnet worker (worktree `concern/macos-notarize` off
+`integration`). Worker confirmed the verify command genuinely failed
+pre-change (exit 1), made the minimal addition to `build-macos` in
+`.github/workflows/build.yml` (five new steps, all gated on
+`secrets.APPLE_DEVELOPER_ID_CERT_P12 != ''`: import cert to temp keychain,
+codesign with hardened-runtime entitlements, notarize+staple the `.app`,
+build+rename the DMG via `create-dmg`, notarize+staple the DMG; plus a
+gated dmg artifact upload and an added `Rylus-*-universal.dmg` glob in the
+Publish step's `files:`, left unmatched-and-skipped when absent since
+`action-gh-release`'s `fail_on_unmatched_files` defaults false), confirmed
+verify now passes (exit 0) and the YAML parses, and cited real sources
+consulted (GitHub's own "installing an Apple certificate on macOS runners"
+guide, Apple-Actions/import-codesign-certs, sindresorhus/create-dmg's
+README, action-gh-release's action.yml) rather than guessing syntax from
+memory. PASSED, commit `4a03b2d`.
+
+I independently re-verified before integrating: read the full diff (74
+insertions, `build-macos` job only, existing unsigned-zip path untouched
+and unconditional), confirmed all five new steps are Apple-secret-gated
+and none of the always-run steps depend on secrets, confirmed no
+credentials hardcoded and no secret names beyond the five TODOS.md already
+names.
+
+**Worktree/rebase mishap this tick (self-inflicted, recovered, learning
+recorded).** Wrote a CLAIMED note into STATE.md before dispatch, then
+called `integrate.sh` directly from the main worktree while the worker's
+worktree still held `concern/macos-notarize` checked out — first attempt
+failed cleanly ("already used by worktree", no damage). Removed the
+worktree with `git worktree remove` (not `worktree.sh destroy`, which would
+also have deleted the branch) to free it, then retried `integrate.sh`
+without first stashing my own uncommitted STATE.md edit — the checkout
+succeeded but the rebase then failed on "unstaged changes" (that very
+STATE.md edit), and the failure handler's `git reset --hard` silently
+discarded it, same class of loss as a prior tick's known trap but via a new
+concrete trigger (worktree-branch collision forcing a second integrate.sh
+call with dirty state in between). Recovered by re-authoring this entry
+from scratch (no ledger/commit state was lost, only the draft narrative
+text). Recorded a new learning capturing the specific trigger so a future
+tick fully vacates the concern branch from its worktree *and* keeps the
+main worktree commit-clean before the *first* `integrate.sh` call, not
+just "at some point before it runs."
+
+Re-ran the verify command myself on the integrated tree:
+`grep -q 'notarytool' .github/workflows/build.yml` → exit 0. Recorded both
+todos done via `ledger.py done --run` (refuses unless the cmd exits 0):
+
+- DONE — `M3.P3.S1.T1` + `M3.P9.S2.T2`/M3G4 (concern: `macos-notarize`) —
+  integrated at `a4cdf5d`.
+
+`ledger.py next --milestone M3` now shows **0 unclaimed** — all 10 M3
+todos done. All four gate checks re-verified directly by me on the
+integrated tree: M3G1 `test -f packaging/macos/icon.icns` → 0, M3G2
+`test -f packaging/macos/entitlements.plist` → 0, M3G3 `grep -q
+aarch64-apple-darwin .github/workflows/build.yml` → 0, M3G4 `grep -q
+notarytool .github/workflows/build.yml` → 0. M3 is **candidate-complete**;
+CONTROL flipped `NORMAL` → `AUDIT` (CURRENT_MILESTONE stays `M3`). No audit
+performed this tick per instructions — that's the next tick's job.
+
+Worktree destroyed (post-integration, branch `concern/macos-notarize`
+deleted with it). No a2a-requests filed this tick.
 
 ## 2026-08-13 tick — NORMAL: M3 CI universal build + README docs (2 concerns, 8/10 done)
 
@@ -659,63 +756,6 @@ proof it's wired, not just green once. Everything else audited this tick
 (all 5 gates, self-test substance, mdns fix stability, bench harness
 reality, CI wiring) is confirmed solid and does not need re-auditing next
 tick unless touched.
-
-## 2026-07-20 tick — REMEDIATION: both AUDIT findings fixed, back to AUDIT
-
-Fixed exactly the two blocking issues from the prior AUDIT:FAIL tick, nothing
-else. Dispatched 2 disjoint sonnet workers in their own worktrees
-(`scripts/worktree.sh create`), independently re-verified each on my own side
-before integrating (never trusted the self-reports alone), then integrated
-both onto `integration` via `scripts/integrate.sh` with real gate commands.
-
-**1. mdns race (`collision_suffix()`, `crates/rylus-server/src/mdns.rs`).**
-`concern/fix-mdns-race` → `40203ca`, integrated `3f5c073`. Replaced the
-non-atomic load-then-`store` on the cached `AtomicU32` with a single
-`compare_exchange(0, mixed, Relaxed, Relaxed)`, so the cache populates
-exactly once and every caller (winner or loser) converges on the same
-value. Diff is 4 lines, only that one function touched. Independently
-re-ran `cargo test -p rylus-server mdns:: --locked -- --test-threads=8` 10x
-back-to-back on my own side twice — once in the worker's worktree pre-merge,
-once again on the integrated `integration` tip post-merge — **20/20 clean,
-zero flakes**. Not a lucky roll: this closes the actual data race, not just
-reduces its probability. `M1.P9.S1.T1`'s ledger entry (artifact `cargo test
---workspace --locked`) is left as-is per the remediation brief (command
-unchanged, now genuinely stable) — re-ran the full workspace suite 3x more
-this tick, all exit 0, zero failures (67/67 in `rylus-server`'s own unit
-binary each time, no `FAILED` lines anywhere).
-
-**2. `M1.P1.S1.T3` vacuous artifact (`crates/rylus-server/src/self_test.rs`).**
-`concern/fix-selftest-test` → `4989af3`, integrated `170c509`. Added a
-`#[cfg(test)] mod tests` block at the end of the file (the crate has no
-`[lib]` target, so a `tests/*.rs` integration file can't link against
-`self_test::run` — matched the existing bin-only architecture rather than
-inventing one) with one test, `self_test_run_passes_and_tears_down_cleanly`,
-that calls `run()` in-process and asserts `true`. Independently re-ran
-`cargo test -p rylus-server self_test --locked -- --nocapture` myself both
-pre- and post-merge: `test result: ok. 1 passed; 0 failed` both times (was
-"running 0 tests" before). Retracted the prior false-positive ledger record
-and re-recorded for real: `ledger.py kill --todo M1.P1.S1.T3 --reason
-"artifact was vacuous — 0 tests matched, no test existed"` then `ledger.py
-done --todo M1.P1.S1.T3 --cmd 'cargo test -p rylus-server self_test
---locked' --commit 170c509 --concern self-test-integration-test --run` (the
-`--run` flag executed the command for real as part of recording).
-
-**One self-caused regression, caught and fixed before declaring done:** the
-new test assertion line in `self_test.rs` exceeded rustfmt's width and broke
-M1G3 (`cargo fmt -- --check`, `M1.P9.S1.T3`) — `ledger.py check --rerun`
-caught it immediately after integrating (`FAIL: M1.P9.S1.T3 RERUN 'cargo fmt
--- --check' => 1`). Ran `cargo fmt -p rylus-server` and committed the
-4-line reformat separately (`b94eeaa`, `chore: cargo fmt self_test.rs`).
-Re-ran `cargo fmt -- --check` after: clean. This is why "green once" isn't
-enough — re-verify after every change, including your own follow-ups.
-
-**Final re-check before flipping the control block:** `ledger.py check
---rerun` → PASS (15/15 done todos, structural+rerun). `cargo fmt -- --check`
-→ clean. `cargo test --workspace --locked` run 3 additional times → exit 0
-all 3, zero `FAILED` lines. Both audit findings are closed with real
-evidence, not self-report. Flipping `MILESTONE_PHASE` to `AUDIT`,
-`CURRENT_MILESTONE` stays `M1` — this tick does not audit its own work, a
-future tick re-verifies and decides master fast-forward.
 
 - 2026-07-20T22:35:30Z — integrated `concern/self-test-flag` into `integration` at `024080e`
 - 2026-07-20T22:37:52Z — integrated `concern/protocol-doc` into `integration` at `f498d1c`
