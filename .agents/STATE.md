@@ -694,3 +694,4 @@ sole job.
 - 2026-07-21T00:41:16Z — integrated `concern/latency-instrumentation` into `integration` at `84f2059`
 - 2026-08-13T17:47:27Z — integrated `concern/macos-icon-icns` into `integration` at `ba5e949`
 - 2026-08-13T17:47:29Z — integrated `concern/macos-entitlements` into `integration` at `6ffa467`
+- 2026-08-13T17:47:31Z — integrated `concern/macos-bundle-metadata` into `integration` at `a35e240`
