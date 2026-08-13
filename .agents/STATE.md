@@ -745,3 +745,4 @@ command against a nonzero passed-test count, not just exit code 0.
 - 2026-08-13T17:47:29Z — integrated `concern/macos-entitlements` into `integration` at `6ffa467`
 - 2026-08-13T17:47:31Z — integrated `concern/macos-bundle-metadata` into `integration` at `a35e240`
 - 2026-08-13T19:21:36Z — integrated `concern/macos-universal-ci` into `integration` at `d61455a`
+- 2026-08-13T19:21:38Z — integrated `concern/readme-dmg-install` into `integration` at `8df53f8`
