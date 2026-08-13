@@ -297,7 +297,9 @@ Note for Firefox users: a [known bug](https://bugzilla.mozilla.org/show_bug.cgi?
 
 ### macOS
 
-Rylus needs the following macOS permissions:
+Download `Rylus-<version>-universal.dmg` from the [releases page](https://github.com/Chorosyne/rylus/releases), open it, and drag `Rylus.app` into `/Applications`. The DMG is notarized, so Gatekeeper should let it open without extra steps.
+
+On first launch, macOS will prompt for the permissions below — grant them via System Settings → Privacy & Security if you decline the prompt initially:
 - Incoming connections
 - Screen capturing
 - Controlling your desktop

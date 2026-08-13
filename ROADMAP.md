@@ -157,7 +157,7 @@ buildable now; the signing CI steps land once the cert is provisioned (AX-8).
 ### M3.P3.S1 — Release pipeline
 
 - **`M3.P3.S1.T1`** — Add codesign (`--options=runtime --timestamp --entitlements`), `notarytool submit --wait`, and `stapler staple` steps gated on the Apple secrets, producing `Rylus-<ver>-universal.dmg` via `create-dmg`. → *Artifact:* `grep -q 'notarytool' .github/workflows/build.yml` · *Concern:* packaging
-- **`M3.P3.S1.T2`** — Update the macOS install section of `Readme.md` (download DMG, drag to Applications, grant Screen Recording + Accessibility). → *Artifact:* `grep -qi 'dmg' Readme.md` · *Concern:* docs
+- **`M3.P3.S1.T2`** — Update the macOS install section of `README.md` (download DMG, drag to Applications, grant Screen Recording + Accessibility). → *Artifact:* `grep -qi 'dmg' README.md` · *Concern:* docs
 
 ## M3.P9 — Milestone quality gates
 
