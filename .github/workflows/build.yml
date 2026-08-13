@@ -213,17 +213,91 @@ jobs:
       run: |
         cd target/release/bundle/osx
         zip -r macos-universal.zip Rylus.app
+    # -------------------------------------------------------------------------
+    # Codesign / notarize / DMG steps below are gated on APPLE_DEVELOPER_ID_CERT_P12
+    # being present. Real cert provisioning (Apple Developer Program enrollment,
+    # exporting the .p12, populating the secrets) is tracked separately in
+    # TODOS.md section 2 — until then these steps are skipped and the job still
+    # completes green, publishing only the unsigned zip.
+    - name: Import signing certificate
+      if: ${{ secrets.APPLE_DEVELOPER_ID_CERT_P12 != '' }}
+      env:
+        BUILD_CERTIFICATE_BASE64: ${{ secrets.APPLE_DEVELOPER_ID_CERT_P12 }}
+        P12_PASSWORD: ${{ secrets.APPLE_DEVELOPER_ID_CERT_PASSWORD }}
+      run: |
+        CERTIFICATE_PATH="$RUNNER_TEMP/developer_id.p12"
+        KEYCHAIN_PATH="$RUNNER_TEMP/rylus-signing.keychain-db"
+        KEYCHAIN_PASSWORD="$(uuidgen)"
+        echo -n "$BUILD_CERTIFICATE_BASE64" | base64 --decode -o "$CERTIFICATE_PATH"
+        security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+        security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+        security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+        security import "$CERTIFICATE_PATH" -P "$P12_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+        security set-key-partition-list -S apple-tool:,apple: -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+        security list-keychain -d user -s "$KEYCHAIN_PATH" login.keychain
+        echo "KEYCHAIN_PATH=$KEYCHAIN_PATH" >> "$GITHUB_ENV"
+    - name: Codesign app bundle
+      if: ${{ secrets.APPLE_DEVELOPER_ID_CERT_P12 != '' }}
+      run: |
+        codesign --sign "Developer ID Application" \
+          --options=runtime --timestamp \
+          --entitlements packaging/macos/entitlements.plist \
+          --deep --force \
+          target/release/bundle/osx/Rylus.app
+    - name: Notarize and staple app bundle
+      if: ${{ secrets.APPLE_DEVELOPER_ID_CERT_P12 != '' }}
+      env:
+        APPLE_ID: ${{ secrets.APPLE_ID }}
+        APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        APPLE_NOTARY_PASSWORD: ${{ secrets.APPLE_NOTARY_PASSWORD }}
+      run: |
+        cd target/release/bundle/osx
+        ditto -c -k --keepParent Rylus.app Rylus-app-notarize.zip
+        xcrun notarytool submit Rylus-app-notarize.zip \
+          --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" --password "$APPLE_NOTARY_PASSWORD" \
+          --wait
+        xcrun stapler staple Rylus.app
+        rm -f Rylus-app-notarize.zip
+    - name: Build DMG
+      if: ${{ secrets.APPLE_DEVELOPER_ID_CERT_P12 != '' }}
+      run: |
+        version="${GITHUB_REF_NAME#v}"
+        brew install create-dmg
+        cd target/release/bundle/osx
+        create-dmg --overwrite --no-code-sign \
+          "Rylus.app" .
+        mv "Rylus "*.dmg "Rylus-${version}-universal.dmg"
+    - name: Notarize and staple DMG
+      if: ${{ secrets.APPLE_DEVELOPER_ID_CERT_P12 != '' }}
+      env:
+        APPLE_ID: ${{ secrets.APPLE_ID }}
+        APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        APPLE_NOTARY_PASSWORD: ${{ secrets.APPLE_NOTARY_PASSWORD }}
+      run: |
+        version="${GITHUB_REF_NAME#v}"
+        cd target/release/bundle/osx
+        xcrun notarytool submit "Rylus-${version}-universal.dmg" \
+          --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" --password "$APPLE_NOTARY_PASSWORD" \
+          --wait
+        xcrun stapler staple "Rylus-${version}-universal.dmg"
     - name: Artifacts
       uses: actions/upload-artifact@v6
       with:
         name: macos-universal
         path: target/release/bundle/osx/macos-universal.zip
+    - name: Artifacts (dmg)
+      if: ${{ secrets.APPLE_DEVELOPER_ID_CERT_P12 != '' }}
+      uses: actions/upload-artifact@v6
+      with:
+        name: macos-universal-dmg
+        path: target/release/bundle/osx/Rylus-*-universal.dmg
     - name: Publish
       uses: softprops/action-gh-release@v2
       if: startsWith(github.ref, 'refs/tags/')
       with:
           files: |
             target/release/bundle/osx/macos-universal.zip
+            target/release/bundle/osx/Rylus-*-universal.dmg
           prerelease: false
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
