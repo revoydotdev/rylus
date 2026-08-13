@@ -738,3 +738,4 @@ future tick re-verifies and decides master fast-forward.
 - 2026-08-13T17:47:31Z — integrated `concern/macos-bundle-metadata` into `integration` at `a35e240`
 - 2026-08-13T19:21:36Z — integrated `concern/macos-universal-ci` into `integration` at `d61455a`
 - 2026-08-13T19:21:38Z — integrated `concern/readme-dmg-install` into `integration` at `8df53f8`
+- 2026-08-13T20:20:26Z — integrated `concern/macos-notarize` into `integration` at `4a03b2d`
