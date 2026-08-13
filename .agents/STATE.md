@@ -4,10 +4,47 @@
 > Status keys: CLAIMED · IN_PROGRESS · DONE · BLOCKED · GATE-FAILED
 
 <!-- CONTROL: machine-read; supervisor updates these two lines -->
-- MILESTONE_PHASE: AUDIT
-- CURRENT_MILESTONE: M3
+- MILESTONE_PHASE: NORMAL
+- CURRENT_MILESTONE: M4
 
-## 2026-08-13 tick — M3 REMEDIATION: both actionable findings closed, phase → AUDIT
+## 2026-08-13 tick — M3 AUDIT: blind verifier PASS, promoted to master, phase → NORMAL/M4
+
+Independent blind Sonnet 5 verifier (ADR-0024), given only repo root + ref
+`integration`, the four gate commands verbatim, and instructions to run
+`ledger.py check --rerun` and read `VISION.md` — no STATE.md, no prior
+findings, no producer narrative.
+
+**Verdict: PASS.** Per-gate evidence, all commands rerun fresh this tick:
+
+| Gate | Command | Exit |
+| --- | --- | --- |
+| M3G1 icon | `test -f packaging/macos/icon.icns` | 0 |
+| M3G2 entitlements | `test -f packaging/macos/entitlements.plist` | 0 |
+| M3G3 universal CI | `grep -q 'aarch64-apple-darwin' .github/workflows/build.yml` | 0 |
+| M3G4 notarization wired | `grep -q 'notarytool' .github/workflows/build.yml` | 0 |
+| repo-wide | `python3 scripts/ledger.py check --rerun` | 0 (38 done todos, structural+rerun) |
+
+Verifier's substance note (not a FAIL): M3G3/M3G4 are string-presence greps —
+weak proxies for "CI actually assembles+notarizes a universal DMG" per
+VISION.md AX-8. Recorded as a caveat on the promotion, not sent back to
+REMEDIATION — no new agent-fixable defect, just a suggestion to harden the
+gate commands themselves in a future milestone's tooling work.
+
+**Operator gate carried forward unchanged.** a2a-request `4f1be84965a3`
+(type `resource`, Apple Developer enrollment + 5 signing secrets on
+`revoydotdev/rylus`) remains BLOCKED-PENDING-OPERATOR with no new information
+this tick. Per the anti-relitigation rule it was not retried or re-posted.
+The codesign/notarize/create-dmg steps stay inert until the secrets land;
+that is the operator's gate, not this promotion's.
+
+**Promotion.** `master` was aswarm-owned, clean, not checked out in any other
+worktree, and a clean fast-forward ancestor check passed
+(`git merge-base --is-ancestor master integration`). Fast-forwarded
+`master` → `integration`'s `d3b8442` and pushed to `origin/master`
+(`61af215..d3b8442`). No PR needed.
+
+Phase → **NORMAL**, milestone advances **M3 → M4** (Signed Windows MSI, per
+`ROADMAP.md`).
 
 Preflight CLEAN. Worked the prior AUDIT's three itemized findings; finding 1
 stays operator-gated, findings 2 and 3 are fixed with fresh evidence.
