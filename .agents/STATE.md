@@ -4,8 +4,52 @@
 > Status keys: CLAIMED · IN_PROGRESS · DONE · BLOCKED · GATE-FAILED
 
 <!-- CONTROL: machine-read; supervisor updates these two lines -->
-- MILESTONE_PHASE: AUDIT
+- MILESTONE_PHASE: REMEDIATION
 - CURRENT_MILESTONE: M3
+
+## 2026-08-13 tick — M3 AUDIT → **FAIL** (independent verifier); phase set REMEDIATION
+
+Preflight CLEAN. Sole audit turn, no feature workers. A fresh Sonnet 5 verifier
+was given only the M3G1–M3G4 gate list, the `integration` ref, and the VISION
+axioms — no STATE.md narrative, no ledger reasoning, no account of who built
+what — and re-derived the verdict from the gates and code alone (ADR-0024).
+Its verdict stands unmodified; the supervisor did not override it.
+
+Per-gate evidence (commands run this tick against `integration` @ `0149ce8`):
+
+| Gate | Command | Exit | Verdict |
+| --- | --- | --- | --- |
+| M3G1 | `test -f packaging/macos/icon.icns` | 0 | PASS — real 70,564-byte Mac OS X icon, wired at `crates/rylus-server/Cargo.toml:53` |
+| M3G2 | `test -f packaging/macos/entitlements.plist` | 0 | PASS — well-formed plist, substantive `disable-library-validation` entry (ffmpeg dynamic linking) |
+| M3G3 | `grep -q 'aarch64-apple-darwin' .github/workflows/build.yml` | 0 | PASS — `build.yml:201-210` really builds both arches and `lipo -create`s them |
+| M3G4 | `grep -q 'notarytool' .github/workflows/build.yml` | 0 | **FAIL on substance** — steps are real but structurally dead (below) |
+| ledger | `python3 scripts/ledger.py check --rerun` | 1 | FAIL — two unrelated M2 rerun failures |
+
+**Findings to remediate.**
+
+1. **BLOCKED-PENDING-OPERATOR** — M3's named artifact does not exist. Every
+   codesign / notarize / DMG step is conditioned on
+   `secrets.APPLE_DEVELOPER_ID_CERT_P12 != ''` (`build.yml:223,240,248,262,271,289`)
+   and `gh secret list -R revoydotdev/rylus` is empty, so each real CI run skips
+   them and publishes only an unsigned `macos-universal.zip` — no `.dmg`, ever.
+   The grep-only gate rubber-stamps code that cannot execute for anyone. Needs a
+   paid Apple Developer enrollment and cert material; no agent can close it.
+   Posted as a2a-request `4f1be84965a3` (type `resource`), asking the operator to
+   either provision the secrets or authorise redefining M3 to "CI plumbing ready,
+   pending Apple enrollment" — the latter also requires rewording M3G4 so it
+   asserts something an agent can actually verify.
+2. **Actionable** — `TODOS.md:36-56` still reads "No code signing, no
+   notarization, no arm64, no DMG" as *status today* and leaves the
+   universal-build / entitlements / icon / codesign / notarize tasks unchecked,
+   contradicting the code that now exists in `build.yml` and `packaging/macos/`.
+   Docs-vs-behavior drift; fix the doc, not the code.
+3. **Actionable** — repo-wide ledger is red on two M2 entries:
+   `M2.P1.S2.T2` (`cargo audit` → 1, RUSTSEC-2026-0257 in `webbrowser 1.2.0`,
+   no fixed release) and `M2.P3.S1.T2` (`npm run a11y` → 1,
+   `ERR_MODULE_NOT_FOUND: playwright`). Neither touches an M3 gate, but
+   `ledger.py check --rerun` cannot go green while they stand.
+
+No AX-1/AX-2/AX-3 conflict; this is packaging-only work.
 
 ## 2026-08-13 tick — RECOVERY (preflight DIRTY:1): governance feed untracked, M3 AUDIT still pending
 
@@ -636,39 +680,6 @@ Pushed with `git push origin master` (normal push, not force) →
 `MILESTONE_PHASE` set to `NORMAL`, `CURRENT_MILESTONE` advanced to `M2`
 (Security review & latency verification) per `ROADMAP.md:82` — the next
 milestone after M1 in the file, not a guess.
-
-## 2026-07-20 tick — REMEDIATION: fixed vacuous protocol-doc-drift test (M1.P2.S1.T3)
-
-Narrow fix for the prior tick's sole AUDIT:FAIL finding. Replaced
-`protocol_version_is_three` (`crates/rylus-core/src/protocol.rs`) — which
-only compared `PROTOCOL_VERSION` to a second hardcoded literal `3` in the
-same file and never touched `docs/PROTOCOL.md` — with
-`protocol_version_matches_docs`, which reads `docs/PROTOCOL.md` at compile
-time via `include_str!`, parses the `pub const PROTOCOL_VERSION` /
-`pub const MIN_CLIENT_PROTOCOL_VERSION` declarations the doc quotes
-verbatim from this file, and asserts both against the real constants.
-
-Proved the guard actually fires before committing: scratch-bumped
-`PROTOCOL_VERSION` to `4` without touching the doc, confirmed
-`protocol_version_matches_docs` FAILED with a clear drift message, then
-reverted the scratch edit (`git checkout -- crates/rylus-core/src/protocol.rs`)
-before writing the real fix.
-
-Verification re-run for real, not trusted: `cargo test -p rylus-core
-protocol_version --locked` (1 passed), `cargo fmt -- --check` (exit 0, no
-diff), `cargo clippy --all-targets -- -D warnings` (exit 0, no warnings),
-then `cargo test --workspace --locked` (full workspace, 0 failed across
-all crates) as a final regression check on `integration` tip. Fix commit:
-`38054b0`. Ledger: `python3 scripts/ledger.py done --todo M1.P2.S1.T3
---commit 38054b0 --concern protocol-doc-drift-test --cmd 'cargo test -p
-rylus-core protocol_version --locked' --run` recorded a genuine 0-exit
-verification (superseding the prior self-healed, no-commit record).
-`ledger.py check --rerun` → PASS (15/15 done todos).
-
-M1's only blocking finding is now closed. `MILESTONE_PHASE` set to
-`AUDIT`, `CURRENT_MILESTONE` stays `M1` — a future tick performs the
-independent AUDIT; this tick did not self-certify the audit. Did not touch
-`master`/`origin` beyond a normal push to `integration`.
 
 - 2026-07-20T22:35:30Z — integrated `concern/self-test-flag` into `integration` at `024080e`
 - 2026-07-20T22:37:52Z — integrated `concern/protocol-doc` into `integration` at `f498d1c`
