@@ -198,23 +198,32 @@ jobs:
       run: |
         source "$HOME/.cargo/env"
         eval "$(/usr/local/bin/brew shellenv zsh)"
+        rustup target add x86_64-apple-darwin aarch64-apple-darwin
         npm install
+        cargo build --release --package rylus-server --target x86_64-apple-darwin
+        cargo build --release --package rylus-server --target aarch64-apple-darwin
         cargo bundle --release --package rylus-server
+    - name: Merge universal binary
+      run: |
+        lipo -create -output target/rylus-universal \
+          target/x86_64-apple-darwin/release/rylus \
+          target/aarch64-apple-darwin/release/rylus
+        cp target/rylus-universal target/release/bundle/osx/Rylus.app/Contents/MacOS/rylus
     - name: Package
       run: |
         cd target/release/bundle/osx
-        zip -r macos-intel.zip Rylus.app
+        zip -r macos-universal.zip Rylus.app
     - name: Artifacts
       uses: actions/upload-artifact@v6
       with:
-        name: macos-intel
-        path: target/release/bundle/osx/macos-intel.zip
+        name: macos-universal
+        path: target/release/bundle/osx/macos-universal.zip
     - name: Publish
       uses: softprops/action-gh-release@v2
       if: startsWith(github.ref, 'refs/tags/')
       with:
           files: |
-            target/release/bundle/osx/macos-intel.zip
+            target/release/bundle/osx/macos-universal.zip
           prerelease: false
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
