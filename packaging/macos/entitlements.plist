@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- rylus-encode (crates/rylus-encode/Cargo.toml) links ffmpeg-sys-next without the
+         crate's "static"/"build" features, so build.rs (link_to_libraries) resolves and
+         dynamically links libavcodec/libavformat/libavfilter/libswscale/libswresample via
+         pkg-config against the Homebrew-installed FFmpeg on the build/runtime host
+         (.github/workflows/build.yml smoke-macos/build-macos run `brew shellenv` but never
+         `brew install ffmpeg`, i.e. FFmpeg is a pre-provisioned Homebrew package on the
+         runner, not vendored/signed by us). Homebrew dylibs are at most ad-hoc signed and
+         do not carry our Developer ID Team ID, so hardened-runtime Library Validation would
+         refuse to load them at process launch. This entitlement is required until FFmpeg is
+         statically linked (ffmpeg-sys-next "static"/"build" feature) or re-signed with our
+         Team ID, either of which would let this exception be removed. -->
+    <key>com.apple.security.cs.disable-library-validation</key>
+    <true/>
+</dict>
+</plist>
