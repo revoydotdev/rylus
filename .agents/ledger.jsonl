@@ -33,3 +33,5 @@
 {"commit":"","concern":"","milestone":"M2","todo":"M2.P9.S2.T1","ts":"2026-07-20T20:41:41-0400","type":"done","verified_by":{"cmd":"test -f docs/LATENCY.md","exit":0}}
 {"commit":"ba5e949990c05c779d06593eb6840d0025b3cdd2","concern":"macos-icon-icns","milestone":"M3","todo":"M3.P1.S1.T1","ts":"2026-08-13T13:48:00-0400","type":"done","verified_by":{"cmd":"test -f packaging/macos/icon.icns","exit":0}}
 {"commit":"ba5e949990c05c779d06593eb6840d0025b3cdd2","concern":"macos-icon-icns","milestone":"M3","todo":"M3.P9.S1.T1","ts":"2026-08-13T13:48:00-0400","type":"done","verified_by":{"cmd":"test -f packaging/macos/icon.icns","exit":0}}
+{"commit":"6ffa467d2406079c1c61347e1c39ec31b3b5b054","concern":"macos-entitlements","milestone":"M3","todo":"M3.P2.S1.T1","ts":"2026-08-13T13:48:00-0400","type":"done","verified_by":{"cmd":"test -f packaging/macos/entitlements.plist","exit":0}}
+{"commit":"6ffa467d2406079c1c61347e1c39ec31b3b5b054","concern":"macos-entitlements","milestone":"M3","todo":"M3.P9.S1.T2","ts":"2026-08-13T13:48:00-0400","type":"done","verified_by":{"cmd":"test -f packaging/macos/entitlements.plist","exit":0}}
