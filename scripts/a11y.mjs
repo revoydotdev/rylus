@@ -23,6 +23,13 @@
 //     variant of the settings panel (superset of visible elements).
 // This is a client-side a11y lint of the authored markup, not a full
 // server-integration test.
+//
+// Prerequisite (one-time per checkout/worktree): `playwright` is an npm
+// devDependency, but its Chromium binary is a separate download that
+// `npm install` does not fetch. Run:
+//   npm install && npx playwright install chromium
+// before invoking `npm run a11y`, or it fails with ERR_MODULE_NOT_FOUND
+// (node_modules missing) or a browser-launch error (binary missing).
 
 import { chromium } from 'playwright';
 import { createServer } from 'node:http';
