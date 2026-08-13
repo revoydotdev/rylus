@@ -35,7 +35,7 @@ Architectural note: Rylus is a desktop **server** + browser **PWA** client. The 
 
 ## 2. Apple — Notarized macOS DMG (outside the App Store)
 
-**Status today**: CI runs `cargo bundle --release --package rylus-server` on a self-hosted macOS runner and publishes `macos-intel.zip` (unsigned, Intel-only) on tag push (`.github/workflows/build.yml:116-145`). Bundle identifier `net.freedesk.rylus` is set (`crates/rylus-server/Cargo.toml:50-52`). **No code signing, no notarization, no arm64, no DMG.**
+**Status today**: CI's `build-macos` job (`.github/workflows/build.yml:191-`) builds a real universal binary — `x86_64-apple-darwin` + `aarch64-apple-darwin` merged via `lipo` — and `cargo bundle`s it with a real icon (`packaging/macos/icon.icns`), entitlements (`packaging/macos/entitlements.plist`), and TCC usage-description strings (`crates/rylus-server/Cargo.toml:53-72`). The workflow also has real `codesign` / `xcrun notarytool submit --wait` / `xcrun stapler staple` / `create-dmg` steps and a release-publish glob for `Rylus-*-universal.dmg`. **All of those signing/notarization/DMG steps are gated on `secrets.APPLE_DEVELOPER_ID_CERT_P12 != ''`** (`build.yml:223,240,248,262,271,289`), and that secret (and its siblings) are not provisioned on `revoydotdev/rylus` — so on every CI run today those steps are skipped and the job still only publishes the unsigned `macos-universal.zip`. No signed, notarized, or DMG artifact has actually shipped yet; the plumbing to produce one exists and is inert pending the Apple Developer prerequisites below.
 
 Decision: skip Mac App Store (sandbox blocks screen capture + synthetic input injection) and skip iPad native App Store app (PWA remains the tablet client).
 
@@ -46,16 +46,16 @@ Decision: skip Mac App Store (sandbox blocks screen capture + synthetic input in
 - [P] Add secrets to GitHub repo: `APPLE_DEVELOPER_ID_CERT_P12` (base64 of .p12), `APPLE_DEVELOPER_ID_CERT_PASSWORD`, `APPLE_ID`, `APPLE_TEAM_ID`, `APPLE_NOTARY_PASSWORD`.
 
 ### Engineering tasks
-- [ ] Create `packaging/macos/icon.icns` — full icon set 16→1024 px.
-- [ ] Enrich `[package.metadata.bundle]` in `crates/rylus-server/Cargo.toml`: add `category`, `copyright`, `short_description`, `long_description`, `version`, `icon` pointing to the `.icns`, and `osx_info_plist_exts` / `osx_minimum_system_version`.
-- [ ] Add usage-description strings to `Info.plist` via cargo-bundle metadata: `NSScreenCaptureUsageDescription`, `NSAppleEventsUsageDescription` (for any AppleScript/Accessibility hooks). Screen Recording + Accessibility are TCC-prompted at runtime; these strings are mandatory for the prompts to render.
-- [ ] Create `packaging/macos/entitlements.plist` with hardened-runtime entries required for signing: `com.apple.security.cs.allow-jit` (if needed), `com.apple.security.cs.disable-library-validation` (only if loading unsigned dylibs — avoid if possible).
-- [ ] Switch CI macOS job to build **universal**: `cargo build --release --target x86_64-apple-darwin` + `cargo build --release --target aarch64-apple-darwin`, then `lipo -create … -output Rylus.app/Contents/MacOS/rylus`.
-- [ ] Add signing step to CI macOS job: import `.p12` into a temp keychain, then `codesign --deep --force --options=runtime --timestamp --entitlements packaging/macos/entitlements.plist --sign "Developer ID Application: …" Rylus.app`.
-- [ ] Add notarization step: `xcrun notarytool submit Rylus.dmg --apple-id … --team-id … --password … --wait` followed by `xcrun stapler staple Rylus.app` and `xcrun stapler staple Rylus.dmg`.
-- [ ] Replace the `zip` packaging step with `create-dmg` producing `Rylus-<ver>-universal.dmg` with a background image + drag-to-Applications UX.
-- [ ] Update the release upload to publish `Rylus-<ver>-universal.dmg` (drop the old `macos-intel.zip`).
-- [ ] Update `Readme.md` macOS install section: download DMG, drag to Applications, grant Screen Recording + Accessibility on first run.
+- [x] Create `packaging/macos/icon.icns` — full icon set 16→1024 px.
+- [x] Enrich `[package.metadata.bundle]` in `crates/rylus-server/Cargo.toml`: add `category`, `copyright`, `short_description`, `long_description`, `version`, `icon` pointing to the `.icns`, and `osx_info_plist_exts` / `osx_minimum_system_version`.
+- [x] Add usage-description strings to `Info.plist` via cargo-bundle metadata: `NSScreenCaptureUsageDescription`, `NSAppleEventsUsageDescription` (for any AppleScript/Accessibility hooks). Screen Recording + Accessibility are TCC-prompted at runtime; these strings are mandatory for the prompts to render.
+- [x] Create `packaging/macos/entitlements.plist` with hardened-runtime entries required for signing: `com.apple.security.cs.disable-library-validation` (needed for the dynamically-linked Homebrew ffmpeg dylibs).
+- [x] Switch CI macOS job to build **universal**: `cargo build --release --target x86_64-apple-darwin` + `cargo build --release --target aarch64-apple-darwin`, then `lipo -create` into the bundle.
+- [x] Add signing step to CI macOS job (present, but gated on `secrets.APPLE_DEVELOPER_ID_CERT_P12` — inert until the cert secret is provisioned).
+- [x] Add notarization step (present, but gated on the same secret — inert until provisioned).
+- [x] Add a `create-dmg` step producing `Rylus-<ver>-universal.dmg` (present, but gated on the same secret — inert until provisioned; still zip-packages the app unconditionally as the fallback artifact).
+- [x] Update the release upload to publish `Rylus-<ver>-universal.dmg` alongside `macos-universal.zip` (glob only resolves to an actual file once the DMG step above has run).
+- [x] Update `Readme.md` macOS install section: download DMG, drag to Applications, grant Screen Recording + Accessibility on first run.
 
 ---
 

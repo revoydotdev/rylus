@@ -136,7 +136,10 @@ posture, and turn "latency is the product" from an assertion into a measurement
 
 Signing/notarization requires the Apple Developer prerequisites in `TODOS.md`
 (`[P][$]`). The icon, bundle metadata, entitlements, and universal build are
-buildable now; the signing CI steps land once the cert is provisioned (AX-8).
+buildable now; the codesign/notarize/DMG CI steps are already written and
+wired into `build.yml`, gated behind `secrets.APPLE_DEVELOPER_ID_CERT_P12` —
+they start actually producing a signed, notarized `.dmg` once that cert is
+provisioned (AX-8), but are no longer blocked on writing the workflow code.
 
 ## M3.P1 — Bundle assets & metadata
 
