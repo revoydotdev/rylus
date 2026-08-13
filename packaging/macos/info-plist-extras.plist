@@ -1,0 +1,21 @@
+<!--
+  Extra Info.plist entries for the Rylus.app bundle, injected by cargo-bundle
+  via `osx_info_plist_exts` (see crates/rylus-server/Cargo.toml).
+
+  cargo-bundle reads this file's raw contents and appends them verbatim into
+  the generated Info.plist's top-level <dict>, before closing </dict></plist>.
+  It must therefore contain bare <key>/<value> pairs, not a full plist
+  document (no <?xml ...?>, <!DOCTYPE ...>, or <plist>/<dict> wrapper).
+
+  These are the macOS TCC (Transparency, Consent, and Control) usage-
+  description strings shown to the user in the permission prompt:
+
+  - NSScreenCaptureUsageDescription: required for Rylus to capture the
+    display via ScreenCaptureKit/CGDisplayStream.
+  - NSAppleEventsUsageDescription: required if Rylus sends Apple Events
+    (e.g. for AppleScript-driven input injection / automation hooks).
+-->
+<key>NSScreenCaptureUsageDescription</key>
+<string>Rylus needs Screen Recording access to capture your display and share it with your stylus/tablet client.</string>
+<key>NSAppleEventsUsageDescription</key>
+<string>Rylus needs Apple Events access to inject stylus and keyboard input into other applications.</string>

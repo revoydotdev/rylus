@@ -54,6 +54,22 @@ time = "0.3"
 [package.metadata.bundle]
 name = "Rylus"
 identifier = "net.freedesk.rylus"
+icon = ["packaging/macos/icon.icns"]
+copyright = "Copyright (c) 2025 The Rylus Contributors. All rights reserved."
+category = "public.app-category.utilities"
+short_description = "Use your tablet as a graphics tablet"
+long_description = """
+Rylus turns a tablet or secondary display into a graphics tablet or extended
+screen for your desktop, streaming captured display frames and relaying
+stylus/pen input back to the host in real time.
+"""
+osx_minimum_system_version = "11.0"
+# osx_info_plist_exts appends the raw contents of the referenced file(s) into
+# the generated Info.plist's <dict>, before it is closed. The referenced file
+# injects the macOS TCC usage-description keys Rylus needs at runtime:
+# NSScreenCaptureUsageDescription (Screen Recording, to capture the display)
+# and NSAppleEventsUsageDescription (Apple Events, for input injection).
+osx_info_plist_exts = ["packaging/macos/info-plist-extras.plist"]
 
 [target.'cfg(target_os = "linux")'.dependencies]
 pipewire = "0.9"
