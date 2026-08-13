@@ -703,3 +703,4 @@ milestone after M1 in the file, not a guess.
 - 2026-08-13T19:21:36Z — integrated `concern/macos-universal-ci` into `integration` at `d61455a`
 - 2026-08-13T19:21:38Z — integrated `concern/readme-dmg-install` into `integration` at `8df53f8`
 - 2026-08-13T20:20:26Z — integrated `concern/macos-notarize` into `integration` at `4a03b2d`
+- 2026-08-13T22:08:22Z — integrated `concern/doc-m3-apple-drift` into `integration` at `07098aa`
