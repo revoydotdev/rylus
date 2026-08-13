@@ -38,3 +38,4 @@
 {"commit":"a35e240804afdca7cfe8962f27b358174594d6af","concern":"macos-bundle-metadata","milestone":"M3","todo":"M3.P1.S1.T2","ts":"2026-08-13T13:48:00-0400","type":"done","verified_by":{"cmd":"grep -q 'NSScreenCaptureUsageDescription' crates/rylus-server/Cargo.toml","exit":0}}
 {"commit":"d61455a","concern":"macos-universal-ci","milestone":"M3","todo":"M3.P2.S1.T2","ts":"2026-08-13T15:21:45-0400","type":"done","verified_by":{"cmd":"grep -q 'aarch64-apple-darwin' .github/workflows/build.yml","exit":0}}
 {"commit":"d61455a","concern":"macos-universal-ci","milestone":"M3","todo":"M3.P9.S2.T1","ts":"2026-08-13T15:21:45-0400","type":"done","verified_by":{"cmd":"grep -q 'aarch64-apple-darwin' .github/workflows/build.yml","exit":0}}
+{"commit":"8df53f8","concern":"readme-dmg-install","milestone":"M3","todo":"M3.P3.S1.T2","ts":"2026-08-13T15:21:47-0400","type":"done","verified_by":{"cmd":"grep -qi 'dmg' README.md","exit":0}}

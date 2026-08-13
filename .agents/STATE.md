@@ -7,6 +7,90 @@
 - MILESTONE_PHASE: NORMAL
 - CURRENT_MILESTONE: M3
 
+## 2026-08-13 tick — NORMAL: M3 CI universal build + README docs (2 concerns, 8/10 done)
+
+`ledger.py status --milestone M3` 5/10 done, `next --milestone M3` showed 5
+unclaimed (M3.P2.S1.T2, M3.P3.S1.T1, M3.P3.S1.T2, M3.P9.S2.T1, M3.P9.S2.T2).
+Read both M3 learnings first (macOS-only CLI silent no-op trap; cargo-bundle
+schema must come from real docs, not memory) — neither directly bit this
+tick's concerns, but both stayed in mind while briefing workers.
+
+`M3.P3.S1.T1` (codesign/notarytool/stapler CI steps) and its gate-closing
+twin `M3.P9.S2.T2`/M3G4 remain prereq-gated per the roadmap's own M3 header
+("signing CI steps land once the cert is provisioned, AX-8") — left
+unclaimed again, same rationale as last tick.
+
+CLAIMED (2 disjoint-file concerns, dispatched to sonnet workers):
+- CLAIMED `M3.P2.S1.T2` + `M3.P9.S2.T1`/M3G3 — concern `macos-universal-ci`
+  — touches only `.github/workflows/build.yml`
+- CLAIMED `M3.P3.S1.T2` — concern `readme-dmg-install` — touches only
+  `README.md` and `ROADMAP.md`
+
+Self-heal-check ran first on both with `--record`: both genuinely
+NEEDS-WORK (verify command confirmed failing against the pre-change tree:
+`grep -n aarch64-apple-darwin .github/workflows/build.yml` → no match;
+`grep -n -i dmg README.md` → no match) — no free ledger entries.
+
+Both workers PASSED. Independently re-verified myself before recording done:
+
+- DONE — `M3.P2.S1.T2` + `M3.P9.S2.T1`/M3G3 (concern: `macos-universal-ci`)
+  — integrated at `d61455a`. Root cause: `build-macos` only ever built the
+  host's default x86_64 target through `cargo bundle`, shipping an
+  Intel-only binary mislabeled `macos-intel`. Fix: `rustup target add
+  x86_64-apple-darwin aarch64-apple-darwin`, cross-build both targets with
+  `cargo build --release --target <triple>`, `lipo -create` merges them
+  into a universal binary that overwrites the bundle's
+  `Rylus.app/Contents/MacOS/rylus` before packaging; artifact/zip/publish
+  names renamed `macos-intel` → `macos-universal` consistently (no stale
+  `-intel` name left over). Could not execute `lipo`/`cargo build --target
+  aarch64-apple-darwin` locally — this Linux box has neither the Darwin
+  targets nor `lipo` — so verification is YAML-text-level only (`grep -q
+  aarch64-apple-darwin`, PyYAML parse OK, hand review of indentation against
+  sibling steps), consistent with this milestone's known
+  cannot-execute-macOS-tooling-here constraint. Re-verified myself: fresh
+  `grep -q 'aarch64-apple-darwin' .github/workflows/build.yml` exit 0 on the
+  integrated tree, diff read line-by-line (13 insertions / 4 deletions,
+  `build-macos` job only, no other job touched).
+- DONE — `M3.P3.S1.T2` (concern: `readme-dmg-install`) — integrated at
+  `8df53f8`. Added a DMG download/drag-to-Applications paragraph plus a
+  first-launch permissions note to `README.md`'s existing `### macOS`
+  section (existing permissions bullet list and Hardware Acceleration
+  subsection left intact), consistent with the repo's existing
+  `github.com/Chorosyne/rylus` releases-page convention used elsewhere in
+  the same file. Also fixed the `M3.P3.S1.T2` line in `ROADMAP.md`: its
+  artifact command referenced the nonexistent `Readme.md` (case-sensitive
+  fs; real file is `README.md`), which would have failed forever regardless
+  of doc content — fixed both occurrences on that one line only, left the
+  two other `Readme.md` references (M4.P3.S1.T3, M5.P2.S1.T1) untouched as
+  out of scope. Re-verified myself: fresh `grep -qi 'dmg' README.md` exit 0,
+  `grep -c 'Readme.md' ROADMAP.md` still 2 (only the M3 line changed).
+
+Worktree mishap (self-inflicted, corrected within the tick): after both
+worker branches were verified, I ran `scripts/worktree.sh destroy` on both
+concern worktrees *before* running `scripts/integrate.sh` — `worktree.sh
+destroy` deletes the concern branch along with the worktree, which briefly
+orphaned both workers' commits (`d61455a`, `8df53f8`) as dangling objects.
+Recovered cleanly via `git fsck --no-reflog` (both commits still present,
+nothing lost) and recreated the branches by SHA before integrating
+normally. Separately, an uncommitted `.agents/STATE.md` edit in the main
+worktree (this tick's CLAIMED write-up, made before dispatch per protocol)
+was lost when `integrate.sh`'s first (failed) attempt at
+`concern/macos-universal-ci` hard-reset the branch after a rebase failure
+triggered by that same unstaged file — re-authored from scratch for this
+entry. Lesson for future ticks: destroy worktrees only *after* `integrate.sh`
+has fast-forward-merged the branch, and keep STATE.md edits either committed
+or deferred until after all `integrate.sh` calls for the tick complete, never
+sitting unstaged in the main worktree while `integrate.sh` is checking
+branches out there.
+
+No a2a-requests were needed or filed this tick — both workers resolved
+their scope from the existing repo/roadmap/README conventions.
+
+`ledger.py next --milestone M3` now shows 2 unclaimed
+(`M3.P3.S1.T1`, `M3.P9.S2.T2` — both prereq-gated on Apple secrets). M3 is
+NOT candidate-complete (M3G4 still open); CONTROL stays `NORMAL`/`M3`.
+Both worktrees destroyed (post-integration), `concern/*` branches deleted.
+
 ## 2026-08-13 tick — NORMAL: M3 gate decomposition + 3 dispatched concerns
 
 First NORMAL tick of M3 (`ledger.py status` showed 0 done, `next --milestone
@@ -632,98 +716,6 @@ all 3, zero `FAILED` lines. Both audit findings are closed with real
 evidence, not self-report. Flipping `MILESTONE_PHASE` to `AUDIT`,
 `CURRENT_MILESTONE` stays `M1` — this tick does not audit its own work, a
 future tick re-verifies and decides master fast-forward.
-
-## 2026-07-20 tick — AUDIT: FAIL (2 blocking issues, master NOT fast-forwarded)
-
-Independent re-verification of M1 against its 5 gates. Not a rubber stamp of
-the prior tick's self-report — reran everything from repo root on
-`integration` tip (`9ecaedf`). Two blocking findings, both real, neither
-cosmetic:
-
-**1. M1G1 (`cargo test --workspace --locked`) is FLAKY, not green.** Ran the
-exact gate command 3x back-to-back: FAILED once
-(`mdns::tests::collision_suffix_is_stable_across_calls`, left:"hntu"
-right:"dw0v"), passed twice. Root cause is a real data race in production
-code, not test flakiness: `collision_suffix()`
-(`crates/rylus-server/src/mdns.rs:128-145`) does a non-atomic
-load-check-then-store on a `static AtomicU32` with `Relaxed` ordering — when
-`cargo test` runs multiple test threads in the same binary concurrently, two
-threads can both observe `CACHED == 0`, each compute a different mixed value
-from PID+timestamp jitter, and race to store, so a single test's two
-sequential calls to `collision_suffix()` can observe different values
-depending on interleaving. This is exactly the bug the test's own doc
-comment (`"Stable for the lifetime of the process"`) says must not happen.
-`ledger.py check --rerun` happened to land on a passing interleaving both
-times I invoked it, and reported `ledger check: PASS (15 done todos,
-structural+rerun)` — a lucky roll, not a verified-stable gate. This blocks
-M1G1 and, by extension, `M1.P9.S1.T1`.
-
-**2. `M1.P1.S1.T3`'s artifact is a false positive — no test exists.** The
-todo requires "an integration test that invokes the self-test path and
-asserts a clean exit and teardown," artifact-checked by
-`cargo test -p rylus-server self_test`. `crates/rylus-server/src/self_test.rs`
-(236 lines) contains only the routine itself — zero `#[test]` functions,
-no `#[cfg(test)] mod tests`, no `tests/` integration file referencing it.
-Running the literal artifact command confirms: `cargo test -p rylus-server
-self_test` → "running 0 tests" → exit 0. The check command is a filter
-against a name substring; when nothing matches, `cargo test` still exits 0,
-so the ledger recorded `{"verified_by":{"cmd":"cargo test -p rylus-server
-self_test","exit":0}}` (`ledger.jsonl` line 14, 2026-07-20T19:22:26-0400) as
-proof of a test that was never written. This is a placeholder marked DONE
-via a vacuously-true shell check, not a wired safeguard.
-
-Everything else checked out clean — recording for the remediation tick so it
-isn't re-audited from scratch:
-- M1G2 `cargo clippy --all-targets -- -D warnings` → PASS, no warnings.
-- M1G3 `cargo fmt -- --check` → PASS, no diff.
-- M1G4 `cargo run -q -p rylus-server -- --self-test` → PASS, exit 0, real
-  capture(testsrc)→encode(libx264, full GOP)→bind→WS-accept→teardown path
-  observed in logs, not a stub.
-- M1G5 `test -f docs/PROTOCOL.md && grep -q HeartbeatAck ...` → PASS.
-- `docs/PROTOCOL.md` diffed by hand against every variant in
-  `crates/rylus-core/src/protocol.rs`: all 14 `MessageInbound` variants and
-  all 10 `MessageOutbound` variants are individually documented (§3.1–3.14,
-  §4.1–4.2.7) with accurate JSON shapes, including the one serde-rename
-  exception (`batched_pointer_events`) and the exact field tables for
-  `PointerEvent`/`KeyboardEvent`. No drift found. Consistent with ADR-0003
-  (LAN-only, WebSocket-only v1 transport) — single-WebSocket framing (text
-  control / binary fMP4), no alternate transport implied anywhere in the doc.
-- `crates/rylus-encode/benches/encode.rs` is a real criterion bench
-  (`VideoEncoder::encode()` over a real libx264 software path, not a stub)
-  and `BASELINE.md` records a real measured run (668µs mean, host/FFmpeg
-  version stated) rather than placeholder numbers. Re-ran
-  `scripts/bench-gate.sh` directly: it re-executes the bench for real,
-  parses criterion's actual stdout, computes delta against the baseline
-  parsed out of `BASELINE.md` (not a hardcoded duplicate number), and would
-  exit non-zero past a 15% regression threshold. Measured this run: 678.6µs,
-  +1.6% vs baseline, PASS. This gate is functionally real, not cosmetic.
-- `.github/workflows/build.yml` `quality` job: `Self-test` step
-  (`cargo run -q -p rylus-server -- --self-test`, line 37-38) and
-  `Encode benchmark regression gate` step (`./scripts/bench-gate.sh`, line
-  39-40) are both real steps in a job every other job `needs:`, so a
-  non-zero exit from either genuinely fails the pipeline — not grep-only
-  cosmetic wiring.
-- `git log --oneline -20` on `integration`: commits are atomic, one concern
-  each, and match STATE.md's tick narrative (self-test-flag → protocol-doc →
-  encode-bench → the 3 salvaged orphans → ci-selftest-step →
-  gui-clippy-f32). No surprises.
-- ADR reference check: the audit brief cited "ADR-0001" for the
-  WebSocket-only v1 decision; the actual repo has that decision in
-  **ADR-0003** (`docs/adr/ADR-0003-lan-only-websocket-transport-v1.md`) —
-  ADR-0001 here is the generic "record architecture decisions" meta-ADR.
-  Noting the mismatch for whoever sourced that number; not itself a finding
-  against M1, and the substance (protocol docs/self-test matching the
-  WebSocket-only contract) checks out either way.
-
-**Verdict: FAIL.** Did not touch `master`. `MILESTONE_PHASE` set to
-`REMEDIATION`, `CURRENT_MILESTONE` stays `M1`. Remediation scope for the
-next tick: (a) fix `collision_suffix()` to use a compare-and-swap
-(`compare_exchange`) instead of load-then-store so the cache populates
-exactly once under concurrent callers, and re-run M1G1 several times to
-confirm the flake is actually gone, not just less likely; (b) write the
-missing `M1.P1.S1.T3` integration test for real (invoke the self-test path,
-assert exit and no leaked threads/devices), then re-verify the artifact
-command against a nonzero passed-test count, not just exit code 0.
 
 - 2026-07-20T22:35:30Z — integrated `concern/self-test-flag` into `integration` at `024080e`
 - 2026-07-20T22:37:52Z — integrated `concern/protocol-doc` into `integration` at `f498d1c`

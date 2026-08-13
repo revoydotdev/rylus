@@ -170,3 +170,96 @@ structural+rerun) — **M1 is 15/15 todos done**. Explicitly re-verified all
 all gates green → M1 candidate-complete. Flipping `MILESTONE_PHASE` to
 `AUDIT` per protocol; **not** auditing this tick — that's the next tick's
 sole job.
+
+<!-- rotated  : 1 entries + 0 intlog lines -->
+## 2026-07-20 tick — AUDIT: FAIL (2 blocking issues, master NOT fast-forwarded)
+
+Independent re-verification of M1 against its 5 gates. Not a rubber stamp of
+the prior tick's self-report — reran everything from repo root on
+`integration` tip (`9ecaedf`). Two blocking findings, both real, neither
+cosmetic:
+
+**1. M1G1 (`cargo test --workspace --locked`) is FLAKY, not green.** Ran the
+exact gate command 3x back-to-back: FAILED once
+(`mdns::tests::collision_suffix_is_stable_across_calls`, left:"hntu"
+right:"dw0v"), passed twice. Root cause is a real data race in production
+code, not test flakiness: `collision_suffix()`
+(`crates/rylus-server/src/mdns.rs:128-145`) does a non-atomic
+load-check-then-store on a `static AtomicU32` with `Relaxed` ordering — when
+`cargo test` runs multiple test threads in the same binary concurrently, two
+threads can both observe `CACHED == 0`, each compute a different mixed value
+from PID+timestamp jitter, and race to store, so a single test's two
+sequential calls to `collision_suffix()` can observe different values
+depending on interleaving. This is exactly the bug the test's own doc
+comment (`"Stable for the lifetime of the process"`) says must not happen.
+`ledger.py check --rerun` happened to land on a passing interleaving both
+times I invoked it, and reported `ledger check: PASS (15 done todos,
+structural+rerun)` — a lucky roll, not a verified-stable gate. This blocks
+M1G1 and, by extension, `M1.P9.S1.T1`.
+
+**2. `M1.P1.S1.T3`'s artifact is a false positive — no test exists.** The
+todo requires "an integration test that invokes the self-test path and
+asserts a clean exit and teardown," artifact-checked by
+`cargo test -p rylus-server self_test`. `crates/rylus-server/src/self_test.rs`
+(236 lines) contains only the routine itself — zero `#[test]` functions,
+no `#[cfg(test)] mod tests`, no `tests/` integration file referencing it.
+Running the literal artifact command confirms: `cargo test -p rylus-server
+self_test` → "running 0 tests" → exit 0. The check command is a filter
+against a name substring; when nothing matches, `cargo test` still exits 0,
+so the ledger recorded `{"verified_by":{"cmd":"cargo test -p rylus-server
+self_test","exit":0}}` (`ledger.jsonl` line 14, 2026-07-20T19:22:26-0400) as
+proof of a test that was never written. This is a placeholder marked DONE
+via a vacuously-true shell check, not a wired safeguard.
+
+Everything else checked out clean — recording for the remediation tick so it
+isn't re-audited from scratch:
+- M1G2 `cargo clippy --all-targets -- -D warnings` → PASS, no warnings.
+- M1G3 `cargo fmt -- --check` → PASS, no diff.
+- M1G4 `cargo run -q -p rylus-server -- --self-test` → PASS, exit 0, real
+  capture(testsrc)→encode(libx264, full GOP)→bind→WS-accept→teardown path
+  observed in logs, not a stub.
+- M1G5 `test -f docs/PROTOCOL.md && grep -q HeartbeatAck ...` → PASS.
+- `docs/PROTOCOL.md` diffed by hand against every variant in
+  `crates/rylus-core/src/protocol.rs`: all 14 `MessageInbound` variants and
+  all 10 `MessageOutbound` variants are individually documented (§3.1–3.14,
+  §4.1–4.2.7) with accurate JSON shapes, including the one serde-rename
+  exception (`batched_pointer_events`) and the exact field tables for
+  `PointerEvent`/`KeyboardEvent`. No drift found. Consistent with ADR-0003
+  (LAN-only, WebSocket-only v1 transport) — single-WebSocket framing (text
+  control / binary fMP4), no alternate transport implied anywhere in the doc.
+- `crates/rylus-encode/benches/encode.rs` is a real criterion bench
+  (`VideoEncoder::encode()` over a real libx264 software path, not a stub)
+  and `BASELINE.md` records a real measured run (668µs mean, host/FFmpeg
+  version stated) rather than placeholder numbers. Re-ran
+  `scripts/bench-gate.sh` directly: it re-executes the bench for real,
+  parses criterion's actual stdout, computes delta against the baseline
+  parsed out of `BASELINE.md` (not a hardcoded duplicate number), and would
+  exit non-zero past a 15% regression threshold. Measured this run: 678.6µs,
+  +1.6% vs baseline, PASS. This gate is functionally real, not cosmetic.
+- `.github/workflows/build.yml` `quality` job: `Self-test` step
+  (`cargo run -q -p rylus-server -- --self-test`, line 37-38) and
+  `Encode benchmark regression gate` step (`./scripts/bench-gate.sh`, line
+  39-40) are both real steps in a job every other job `needs:`, so a
+  non-zero exit from either genuinely fails the pipeline — not grep-only
+  cosmetic wiring.
+- `git log --oneline -20` on `integration`: commits are atomic, one concern
+  each, and match STATE.md's tick narrative (self-test-flag → protocol-doc →
+  encode-bench → the 3 salvaged orphans → ci-selftest-step →
+  gui-clippy-f32). No surprises.
+- ADR reference check: the audit brief cited "ADR-0001" for the
+  WebSocket-only v1 decision; the actual repo has that decision in
+  **ADR-0003** (`docs/adr/ADR-0003-lan-only-websocket-transport-v1.md`) —
+  ADR-0001 here is the generic "record architecture decisions" meta-ADR.
+  Noting the mismatch for whoever sourced that number; not itself a finding
+  against M1, and the substance (protocol docs/self-test matching the
+  WebSocket-only contract) checks out either way.
+
+**Verdict: FAIL.** Did not touch `master`. `MILESTONE_PHASE` set to
+`REMEDIATION`, `CURRENT_MILESTONE` stays `M1`. Remediation scope for the
+next tick: (a) fix `collision_suffix()` to use a compare-and-swap
+(`compare_exchange`) instead of load-then-store so the cache populates
+exactly once under concurrent callers, and re-run M1G1 several times to
+confirm the flake is actually gone, not just less likely; (b) write the
+missing `M1.P1.S1.T3` integration test for real (invoke the self-test path,
+assert exit and no leaked threads/devices), then re-verify the artifact
+command against a nonzero passed-test count, not just exit code 0.
