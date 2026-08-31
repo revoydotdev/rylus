@@ -14,7 +14,7 @@ BENCH_NAME="encode_1280x720_bgr0"
 BASELINE_FILE="$(dirname "$0")/../crates/rylus-encode/benches/BASELINE.md"
 THRESHOLD_PCT="${BENCH_GATE_THRESHOLD_PCT:-15}"
 MAX_ATTEMPTS="${BENCH_GATE_ATTEMPTS:-3}"
-MAX_LOAD_PER_CPU="${BENCH_GATE_MAX_LOAD_PER_CPU:-1.0}"
+MAX_RUNNABLE_PER_CPU="${BENCH_GATE_MAX_RUNNABLE_PER_CPU:-1.0}"
 QUIET_WAIT_SECONDS="${BENCH_GATE_QUIET_WAIT_SECONDS:-900}"
 
 # Extracts the middle (point-estimate/mean) value + unit from a criterion
@@ -43,23 +43,25 @@ to_ns() {
 
 wait_for_quiet_host() {
     # A wall-clock regression comparison is meaningless while unrelated jobs
-    # saturate the host. Wait for the one-minute load average to fall below one
-    # runnable task per CPU before each attempt.
-    local cpu_count load_one load_per_cpu started
+    # saturate the host. Use Linux's instantaneous runnable-task count rather
+    # than the one-minute load average, whose decay would add needless idle
+    # time after a build finishes.
+    local cpu_count process_counts runnable_count runnable_per_cpu started
     cpu_count="$(nproc)"
     started="$SECONDS"
     while true; do
-        read -r load_one _ < /proc/loadavg
-        load_per_cpu="$(awk -v loadval="$load_one" -v cpus="$cpu_count" 'BEGIN { printf "%.3f", loadval / cpus }')"
-        if awk -v loadval="$load_per_cpu" -v limit="$MAX_LOAD_PER_CPU" 'BEGIN { exit !(loadval <= limit) }'; then
-            echo "bench-gate: host eligible (load/cpu=${load_per_cpu}, limit=${MAX_LOAD_PER_CPU})"
+        read -r _ _ _ process_counts _ < /proc/loadavg
+        runnable_count="${process_counts%%/*}"
+        runnable_per_cpu="$(awk -v tasks="$runnable_count" -v cpus="$cpu_count" 'BEGIN { printf "%.3f", tasks / cpus }')"
+        if awk -v tasks="$runnable_per_cpu" -v limit="$MAX_RUNNABLE_PER_CPU" 'BEGIN { exit !(tasks <= limit) }'; then
+            echo "bench-gate: host eligible (runnable/cpu=${runnable_per_cpu}, limit=${MAX_RUNNABLE_PER_CPU})"
             return 0
         fi
         if (( SECONDS - started >= QUIET_WAIT_SECONDS )); then
-            echo "bench-gate: host did not become benchmark-eligible within ${QUIET_WAIT_SECONDS}s (load/cpu=${load_per_cpu})" >&2
+            echo "bench-gate: host did not become benchmark-eligible within ${QUIET_WAIT_SECONDS}s (runnable/cpu=${runnable_per_cpu})" >&2
             return 1
         fi
-        echo "bench-gate: waiting for host load to settle (load/cpu=${load_per_cpu}, limit=${MAX_LOAD_PER_CPU})"
+        echo "bench-gate: waiting for host load to settle (runnable/cpu=${runnable_per_cpu}, limit=${MAX_RUNNABLE_PER_CPU})"
         sleep 15
     done
 }
