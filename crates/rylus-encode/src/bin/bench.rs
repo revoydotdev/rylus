@@ -113,7 +113,7 @@ fn report(name: &str, median: u64, mean: u64, budget: u64) -> bool {
 /// Generate a synthetic BGR0 frame of the given dimensions.
 fn make_bgr0_frame(width: usize, height: usize) -> Vec<u8> {
     let mut buf = vec![0u8; width * height * 4];
-    for pixel in buf.chunks_exact_mut(4) {
+    for pixel in buf.as_chunks_mut::<4>().0 {
         pixel[0] = 64; // B
         pixel[1] = 128; // G
         pixel[2] = 32; // R

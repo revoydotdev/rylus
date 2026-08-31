@@ -17,7 +17,7 @@ const HEIGHT: usize = 720;
 /// be correctly sized so `encode()` doesn't bail out early.
 fn make_bgr0_frame(width: usize, height: usize) -> Vec<u8> {
     let mut buf = vec![0u8; width * height * 4];
-    for (i, pixel) in buf.chunks_exact_mut(4).enumerate() {
+    for (i, pixel) in buf.as_chunks_mut::<4>().0.iter_mut().enumerate() {
         let x = (i % width) as u8;
         pixel[0] = x; // B
         pixel[1] = x.wrapping_mul(3); // G

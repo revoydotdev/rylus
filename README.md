@@ -1,6 +1,6 @@
 # Rylus
 
-[![Build](https://github.com/Chorosyne/rylus/actions/workflows/build.yml/badge.svg)](https://github.com/Chorosyne/rylus/actions/workflows/build.yml)
+[![Build](https://github.com/revoydotdev/rylus/actions/workflows/build.yml/badge.svg)](https://github.com/revoydotdev/rylus/actions/workflows/build.yml)
 [![License: AGPL-3.0-or-later](https://img.shields.io/badge/license-AGPL--3.0--or--later-blue.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-2021--edition-orange.svg)](https://www.rust-lang.org/)
 
@@ -111,7 +111,7 @@ The above features are available on all operating systems. Additional features o
 
 ## Installation
 
-Download the latest release for your OS from the [releases page](https://github.com/Chorosyne/rylus/releases). No apps are needed on your tablet — just a modern browser (Firefox 80+, Safari on iOS/iPadOS 13+).
+Download the latest release for your OS from the [releases page](https://github.com/revoydotdev/rylus/releases). No apps are needed on your tablet — just a modern browser (Firefox 80+, Safari on iOS/iPadOS 13+).
 
 **Arch Linux:** install from the AUR:
 
@@ -297,7 +297,7 @@ Note for Firefox users: a [known bug](https://bugzilla.mozilla.org/show_bug.cgi?
 
 ### macOS
 
-Download `Rylus-<version>-universal.dmg` from the [releases page](https://github.com/Chorosyne/rylus/releases), open it, and drag `Rylus.app` into `/Applications`. The DMG is notarized, so Gatekeeper should let it open without extra steps.
+Download `Rylus-<version>-universal.dmg` from the [releases page](https://github.com/revoydotdev/rylus/releases), open it, and drag `Rylus.app` into `/Applications`. The DMG is notarized, so Gatekeeper should let it open without extra steps.
 
 On first launch, macOS will prompt for the permissions below — grant them via System Settings → Privacy & Security if you decline the prompt initially:
 - Incoming connections
@@ -358,7 +358,7 @@ A Dockerfile for building the Linux version is located at [docker/Dockerfile](do
 ```sh
 docker build -t rylus-build docker/
 docker run -it rylus-build bash
-root@container:/# git clone https://github.com/Chorosyne/rylus
+root@container:/# git clone https://github.com/revoydotdev/rylus
 root@container:/# cd rylus/
 root@container:/rylus# cargo build --release
 ```

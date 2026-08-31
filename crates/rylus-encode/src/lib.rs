@@ -1387,7 +1387,7 @@ mod tests {
     /// Generate a test BGR0 frame (blue channel only).
     fn make_bgr0_frame(width: usize, height: usize) -> Vec<u8> {
         let mut buf = vec![0u8; width * height * 4];
-        for pixel in buf.chunks_exact_mut(4) {
+        for pixel in buf.as_chunks_mut::<4>().0 {
             pixel[0] = 128; // B
             pixel[1] = 64; // G
             pixel[2] = 32; // R
