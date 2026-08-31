@@ -16,8 +16,8 @@ authors = ["Chorosyne maintainers"]
 edition = "2021"
 rust-version = "1.88"
 license = "AGPL-3.0-or-later"
-repository = "https://github.com/Chorosyne/rylus"
-homepage = "https://github.com/Chorosyne/rylus"
+repository = "https://github.com/revoydotdev/rylus"
+homepage = "https://github.com/revoydotdev/rylus"
 
 [workspace.dependencies]
 # Internal crates
