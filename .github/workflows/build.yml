@@ -19,18 +19,18 @@ jobs:
     - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
       with:
         node-version: 22
-    - run: npm install
+    - run: npm ci
     - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
       with:
         components: clippy, rustfmt
     - name: Clippy
-      run: cargo clippy --all-targets -- -D warnings
+      run: cargo clippy --all-targets --locked -- -D warnings
     - name: Rustfmt
       run: cargo fmt -- --check
     - name: Cargo test
       run: cargo test --workspace --locked
     - name: Self-test
-      run: cargo run -q -p rylus-server -- --self-test
+      run: cargo run -q --locked -p rylus-server -- --self-test
     - name: Encode benchmark regression gate
       run: ./scripts/bench-gate.sh
     - name: Frontend unit tests
@@ -54,10 +54,10 @@ jobs:
     - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
       with:
         node-version: 22
-    - run: npm install && npm run build
+    - run: npm ci && npm run build
     - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
     - name: Build rylus-server
-      run: cargo build -p rylus-server
+      run: cargo build --locked -p rylus-server
     - name: Self-test
       run: ./target/debug/rylus --self-test
 
@@ -71,8 +71,8 @@ jobs:
       run: |
         source "$HOME/.cargo/env"
         eval "$(/usr/local/bin/brew shellenv zsh)"
-        npm install && npm run build
-        cargo build -p rylus-server
+        npm ci && npm run build
+        cargo build --locked -p rylus-server
         ./target/debug/rylus --self-test
 
   smoke-windows:
@@ -87,11 +87,11 @@ jobs:
     - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
       with:
         targets: x86_64-pc-windows-msvc
-    - run: npm install
+    - run: npm ci
     - name: Build frontend
       run: npm run build
     - name: Build rylus-server
-      run: cargo build -p rylus-server --target x86_64-pc-windows-msvc
+      run: cargo build --locked -p rylus-server --target x86_64-pc-windows-msvc
       env:
         FFMPEG_DIR: C:\ffmpeg-win64
     - name: Self-test
@@ -153,7 +153,7 @@ jobs:
           -e npm_config_cache=/build/.npm-cache \
           --user "$(id -u):$(id -g)" \
           rylus-alpine-build \
-          sh -c "npm install && RUSTFLAGS='-C target-feature=-crt-static' cargo build --release && cd target/release && tar czf rylus-linux-alpine-musl.tar.gz rylus"
+          sh -c "npm ci && RUSTFLAGS='-C target-feature=-crt-static' cargo build --release --locked && cd target/release && tar czf rylus-linux-alpine-musl.tar.gz rylus"
     - name: Artifacts1
       uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
       with:
@@ -182,10 +182,10 @@ jobs:
         source "$HOME/.cargo/env"
         eval "$(/usr/local/bin/brew shellenv zsh)"
         rustup target add x86_64-apple-darwin aarch64-apple-darwin
-        npm install
-        cargo build --release --package rylus-server --target x86_64-apple-darwin
-        cargo build --release --package rylus-server --target aarch64-apple-darwin
-        cargo bundle --release --package rylus-server
+        npm ci
+        cargo build --release --locked --package rylus-server --target x86_64-apple-darwin
+        cargo build --release --locked --package rylus-server --target aarch64-apple-darwin
+        cargo bundle --release --locked --package rylus-server
     - name: Merge universal binary
       run: |
         lipo -create -output target/rylus-universal \
@@ -358,9 +358,9 @@ jobs:
     - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
       with:
         targets: x86_64-pc-windows-msvc
-    - run: npm install
+    - run: npm ci
     - name: Build
-      run: cargo build --release --target x86_64-pc-windows-msvc
+      run: cargo build --release --locked --target x86_64-pc-windows-msvc
       env:
         FFMPEG_DIR: C:\ffmpeg-win64
     - name: Package
