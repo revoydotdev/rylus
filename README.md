@@ -1,431 +1,297 @@
 # Rylus
 
-[![Build](https://github.com/revoydotdev/rylus/actions/workflows/build.yml/badge.svg)](https://github.com/revoydotdev/rylus/actions/workflows/build.yml)
-[![License: AGPL-3.0-or-later](https://img.shields.io/badge/license-AGPL--3.0--or--later-blue.svg)](LICENSE)
-[![Rust](https://img.shields.io/badge/rust-2021--edition-orange.svg)](https://www.rust-lang.org/)
+> Use a tablet or phone as a browser-based drawing surface, touch controller,
+> and screen viewer for your computer.
 
-**Turn a tablet or smartphone into a graphic tablet and touch screen for your computer — using only a browser.**
+![Rylus in action](docs/In_action.gif)
 
-## About
+[Quick start](#quick-start-build-and-run) · [Platform support](#what-it-supports) · [Security](#security-and-network-posture) · [Development](#development) · [License](#lineage-attribution-and-licensing)
 
-Rylus lets you draw, write, and interact with your computer using a tablet or phone as an input device. Open a URL in your tablet's browser, and Rylus streams your screen while capturing stylus pressure, tilt, and multi-touch input. No app install required on the tablet side — any modern browser (Firefox 80+, Safari on iOS/iPadOS 13+) works.
+Rylus serves a small web client from your computer. Open it on a device on the
+same network to view a captured display or window and relay pointer, pen,
+touch, and physical-keyboard input back to the host. There is nothing to
+install on the client device beyond a browser that supports the required web
+platform features.
 
-### Origin and Fork Rationale
+Rylus is intended for a trusted local network, not for exposing desktop
+control to the public internet. Read [Security and network posture](#security-and-network-posture)
+before starting it on a shared network.
 
-Rylus began as a fork of [H-M-H/Weylus](https://github.com/H-M-H/Weylus), which pioneered the idea of using browser [PointerEvents](https://developer.mozilla.org/en-US/docs/Web/API/PointerEvent) to capture stylus and touch input over a local network. That core design — a lightweight web client backed by a native capture and input server — remains the foundation Rylus builds on.
+## At a glance
 
-Over the course of development, the scope of changes grew large enough that the two projects now serve different goals. Rylus replaced all C and C++ code with pure Rust equivalents, swapped the GStreamer pipeline for direct PipeWire bindings, moved from FLTK to egui, restructured the codebase into a modular workspace, and added a security layer for network-exposed operation. These changes affect nearly every subsystem — the dependency graph, build toolchain, error handling model, and threat surface are all materially different from upstream.
+- Browser client for a tablet or phone; no companion app.
+- Display streaming over HTTP(S) and WebSocket on one configurable port
+  (default `1701`).
+- Pointer Events carry pen pressure, tilt, touch, mouse, wheel, and physical
+  keyboard input where the browser and host backend support them.
+- Native capture and input backends for Linux, macOS, and Windows.
+- An all-Rust workspace for Rylus-owned code, with FFmpeg used for H.264/fMP4
+  video encoding.
+- Optional TLS, access-code authentication, browser-origin checks, rate
+  limiting, and mDNS discovery.
 
-Rylus prioritizes long-term maintainability, memory safety across the entire codebase, and production readiness for a tool that exposes a network service on your LAN. The upstream Weylus project deserves credit for the concept and initial implementation that made this work possible.
+## Quick start: build and run
 
-## What Changed from Weylus
+The current repository is the authoritative distribution source. Tagged CI
+workflows can produce platform artifacts, but their publication location and
+availability are not guaranteed by this README.
 
-### Pure Rust Architecture
+### 1. Install build prerequisites
 
-All custom C and C++ code has been eliminated from the project:
+Rylus currently requires Rust **1.88+**, Node.js/npm (to bundle the web
+client), and FFmpeg development libraries. Linux also needs the platform
+libraries for PipeWire/portals and input/capture support. The supplied
+[Dockerfile](docker/Dockerfile) and [Alpine Dockerfile](docker/Dockerfile_alpine)
+are the maintained dependency references.
 
-- **X11 capture:** 785 lines of C (xcapture.c, xhelper.c, plus headers) replaced with [x11rb](https://github.com/psychon/x11rb), a pure Rust X11 protocol implementation. The `rylus-ffi` crate that compiled C FFI bindings was removed entirely.
-- **Screen capture pipeline:** GStreamer and its ~30 transitive C library dependencies (glib, gobject, gstreamer core, plugins, etc.) replaced with direct [pipewire-rs](https://gitlab.freedesktop.org/pipewire/pipewire-rs) bindings for Wayland capture.
-- **Desktop GUI:** FLTK (C++ bindings via fltk-rs) replaced with [egui/eframe](https://github.com/emilk/egui), a pure Rust immediate-mode GUI.
-- **Windows platform bindings:** The community `winapi` crate replaced with Microsoft's official [windows](https://github.com/microsoft/windows-rs) crate, which provides safe COM wrappers and idiomatic `Result` error handling.
-
-A single Rust toolchain now builds the entire project. Memory safety guarantees extend to every line of application code, making the codebase easier to audit and contribute to.
-
-### Modular Workspace
-
-The original monolithic structure has been refactored into a 7-crate Cargo workspace with explicit dependency boundaries:
-
-| Crate | Purpose |
-|-------|---------|
-| **rylus-core** | Config, protocol definitions, error types, pixel formats, shared traits (`Capturable`, `Recorder`, `Geometry`) |
-| **rylus-capture** | Screen capture backends (X11 via x11rb, PipeWire for Wayland, CoreGraphics, Windows GDI) |
-| **rylus-encode** | Video encoding via FFmpeg (H.264, fMP4 container) |
-| **rylus-input** | Input device backends (Linux uinput/evdev, Windows WinRT, macOS enigo) |
-| **rylus-transport** | WebSocket transport layer |
-| **rylus-gui** | Desktop GUI (egui/eframe) |
-| **rylus-server** | HTTP/WebSocket server, session management, main binary |
-
-Each crate compiles independently and backends are swappable behind shared traits defined in rylus-core.
-
-### Security Hardening
-
-Rylus exposes an HTTP and WebSocket service on your local network. The following measures address the basics for responsible deployment:
-
-- **Access code storage:** Plaintext comparison replaced with argon2 hashing and constant-time verification.
-- **Authentication transport:** Access codes moved from GET query parameters to POST request body — codes no longer appear in URLs, server logs, or browser history.
-- **Session management:** Authenticated sessions use HttpOnly, SameSite=Strict cookies.
-- **Rate limiting:** 5 failed authentication attempts per 60-second window triggers a 30-second lockout per IP.
-- **WebSocket limits:** 64KB text frame maximum to prevent OOM from oversized control messages. 120-second idle timeout closes zombie connections, freeing video, encode, and input device resources.
-
-### Reliability and Error Recovery
-
-Real-world capture pipelines fail — hardware goes to sleep, compositors revoke portal access, network links drop. Rylus handles these cases with graceful degradation instead of panics or silent hangs:
-
-- **WebSocket auto-reconnect:** Exponential backoff (1s to 30s), state preservation across reconnections, countdown banner with manual retry in the web client. 10 maximum attempts before giving up.
-- **Heartbeat protocol:** 5-second keep-alive messages (protocol version 3) survive PipeWire capture timeouts that would otherwise look like idle connections, and drive the tablet's connection-quality indicator via RTT sampling.
-- **Capture failure auto-teardown:** After 30 consecutive capture failures, the video loop tears down the recorder and notifies the client instead of spinning indefinitely.
-- **MSE error recovery:** Debounced sourceBuffer restart (5-second cooldown), readyState guards to prevent InvalidStateError cascades on persistent decode errors.
-- **Error handling cleanup:** 54 bare `unwrap()` calls replaced with proper error propagation or descriptive `.expect()` messages. SAFETY comments document invariants on all ~60 `unsafe` blocks.
-- **PipeWire session management:** Portal session caching via `Weak<PortalSession>` eliminates redundant D-Bus calls and compositor prompts. RAII cleanup calls `Session.Close()` on drop. Explicit DMA-BUF and MemFd synchronization with `DMA_BUF_IOCTL_SYNC` prevents segfaults from unsynchronized buffer access.
-- **Encoder buffer validation:** Bounds checks on BGR0, BGR0S, RGB, and RGB0 pixel buffers before writing raw pointers into FFmpeg's AVFrame.
-
-### Developer Experience
-
-- **Test suite:** 200+ tests across Rust and TypeScript covering protocol serialization, config parsing, pixel formats, access code authentication, rate limiting, session tokens, encoder buffer validation, and client reconnect logic.
-- **CI quality gates:** clippy, rustfmt, and cargo-audit run before builds.
-- **Structured logging:** The `tracing` crate with optional JSON output (`RYLUS_LOG_JSON=true`). Configurable log levels via `RYLUS_LOG_LEVEL`.
-- **Frontend build:** esbuild replaces tsc for TypeScript compilation, with proper `rerun-if-changed` integration in build.rs.
-
-### User Interface
-
-- **Native GUI:** egui with custom dark/light Rylus theme, QR code display on all platforms, first-run hints, collapsible settings panel, and inline contextual error messages.
-- **Web client:** Responsive settings panel, debug overlay, energy saving mode, reconnect countdown banner.
-
-## Features
-
-- Control your mouse with your tablet
-- Mirror your screen to your tablet
-- Send keyboard input using physical keyboards
-- Hardware accelerated video encoding
-- Pure Rust codebase — no custom C/C++ code
-- Native desktop GUI built with [egui](https://github.com/emilk/egui)
-- WebSocket auto-reconnect with exponential backoff
-- Access code authentication with argon2 hashing and rate limiting
-
-The above features are available on all operating systems. Additional features on Linux:
-
-- Stylus/pen support with pressure and tilt
-- Multi-touch input (works with apps like Krita that support multi-touch)
-- Capturing specific windows and mapping input to them
-- Faster screen mirroring via shared memory (X11) or DMA-BUF (Wayland)
-- Tablet as second screen
-
-## Platform Support
-
-| Platform | Capture Backend | HW Accelerated Encoding |
-|----------|----------------|------------------------|
-| Linux (X11) | x11rb + MIT-SHM | VAAPI, NVENC |
-| Linux (Wayland) | pipewire-rs + xdg-desktop-portal | VAAPI, NVENC |
-| macOS | CoreGraphics | VideoToolbox |
-| Windows | GDI via windows-rs | NVENC, MediaFoundation |
-
-## Installation
-
-Download the latest release for your OS from the [releases page](https://github.com/revoydotdev/rylus/releases). No apps are needed on your tablet — just a modern browser (Firefox 80+, Safari on iOS/iPadOS 13+).
-
-**Arch Linux:** install from the AUR:
-
-```
-yay -S rylus-bin   # prebuilt binary
-yay -S rylus       # source build
-```
-
-Both packages install a `rylus.service` user unit; `systemctl --user enable --now rylus` will start Rylus in headless mode on login.
-
-**Linux users:** follow the [uinput setup instructions](#linux) to enable stylus pressure sensitivity and multi-touch support.
-
-## Running
-
-Start Rylus, optionally set an access code in the settings panel, and press Start. This launches a webserver on your computer. Open `http://<your computer's address>:<port, default 1701>` in a browser on your tablet. Rylus displays the URL and a QR code you can scan.
-
-If you have a firewall, open TCP port 1701 (or whichever port you configured with `--web-port`). The WebSocket stream is served at `/ws` on the same port — no separate port is needed.
-
-On many Linux distributions this is done with ufw:
-```
-sudo ufw allow 1701/tcp
-```
-
-Rylus supports access code authentication (hashed with argon2, rate-limited) and enables TLS by default (auto mode generates a self-signed certificate on first run). To disable TLS, pass `--tls-mode disabled`; to use a certificate authority-signed certificate, pass `--tls-mode certified` together with `--tls-cert-path` and `--tls-key-path`.
-
-### Fullscreen
-
-Add a bookmark to your home screen on your tablet to run Rylus in full screen mode (on iOS/iPadOS this must be done with Safari). On other platforms there is a button to toggle full screen mode.
-
-### Keyboard Input
-
-Rylus supports keyboard input for physical keyboards. Connect a Bluetooth keyboard to your tablet and start typing. Due to technical limitations, on-screen keyboards are not supported.
-
-### Headless Mode
-
-Rylus provides a command-line interface. `--no-gui` starts Rylus in headless mode, suitable for automation and remote servers.
-
-Minimal headless invocation (starts immediately on port 1701 with TLS auto-enabled):
+For Debian/Ubuntu, this is a practical starting point:
 
 ```sh
-rylus --no-gui
+sudo apt-get install -y \
+  build-essential clang cmake git pkg-config nasm nodejs npm libssl-dev \
+  libgl1-mesa-dev libglu1-mesa-dev \
+  libpipewire-0.3-dev libdbus-1-dev libdrm-dev libva-dev \
+  libwayland-dev libxkbcommon-dev \
+  libavcodec-dev libavformat-dev libavfilter-dev libavutil-dev \
+  libswscale-dev libswresample-dev
 ```
 
-With an access code and explicit TLS mode:
+Install Rust through your platform’s preferred method, then verify the
+toolchain with `rustc --version`.
+
+### 2. Build
 
 ```sh
-rylus --no-gui --access-code mysecret --web-port 1701 --tls-mode auto
+npm ci
+cargo build --release --locked -p rylus-server
 ```
 
-To disable TLS (e.g. when terminating TLS at a reverse proxy):
+The executable is `target/release/rylus` (or `rylus.exe` on Windows).
+
+On Linux/X11, X11 capture is an explicit Cargo feature rather than part of the
+default build:
 
 ```sh
-rylus --no-gui --tls-mode disabled
+cargo build --release --locked -p rylus-server --features x11
 ```
 
-For all options, run `rylus --help`.
+### 3. Start the server
 
-Configuration is stored in `~/.config/rylus/rylus.toml`.
+```sh
+./target/release/rylus --no-gui --access-code 'choose-a-long-code'
+```
 
-Logging is configurable via environment variables:
-- `RYLUS_LOG_LEVEL` — set to `DEBUG` or `TRACE` for verbose output
-- `RYLUS_LOG_JSON=true` — enable structured JSON log output
+`--no-gui` starts immediately. Without it, the native GUI lets you choose
+settings and start the server. Rylus binds to `0.0.0.0:1701` by default and
+advertises itself with mDNS unless `--no-mdns` is supplied.
 
-### Linux
+Open `https://<host-address>:1701` on the tablet, accept the first-run
+certificate warning if you use the default TLS mode, then choose a capture
+source and input options in the web client. The WebSocket endpoint is `/ws` on
+the same port; there is no second port to open.
 
-Rylus uses the `uinput` interface to simulate input events on Linux. **To enable stylus and multi-touch support, `/dev/uinput` must be writable by Rylus.** To make `/dev/uinput` permanently writable by your user, run:
+For the complete option set, use:
+
+```sh
+./target/release/rylus --help
+```
+
+## What it supports
+
+| Host platform | Capture | Input and codec options | Important limits |
+| --- | --- | --- | --- |
+| Linux on X11 | Displays and X11 windows when built with `--features x11` | `uinput` can expose mouse, pen, and touch; VA-API and NVENC are opt-in | Pen/touch require access to `/dev/uinput`; X11 capture is not part of the default build. |
+| Linux on Wayland | PipeWire through `xdg-desktop-portal` | `uinput`; VA-API and NVENC are opt-in | The portal/compositor determines what can be shared. Per-window input mapping and cursor capture are not available. |
+| macOS | CoreGraphics displays and windows | Generic input backend; VideoToolbox is opt-in | macOS permission prompts are required for screen recording and desktop control. |
+| Windows | Desktop displays | Windows synthetic pen/touch input; NVENC and Media Foundation are opt-in | Per-window capture is not implemented. |
+
+Hardware encoding is disabled by default. Enable it only after checking image
+quality and stability on the specific host and driver:
+
+```sh
+# Linux examples
+./target/release/rylus --no-gui --try-vaapi
+./target/release/rylus --no-gui --try-nvenc
+```
+
+macOS accepts `--try-videotoolbox`; Windows accepts `--try-nvenc` and
+`--try-mediafoundation`. These switches request a backend; they do not make an
+unsupported driver or GPU usable.
+
+### Browser and device notes
+
+Rylus depends on browser Pointer Events and Media Source Extensions. Pen
+pressure and tilt are available only when the client browser and stylus expose
+them. A physical keyboard paired with the client device can be relayed; an
+on-screen keyboard is not supported. Add the site to the device’s home screen
+or use the client’s fullscreen control for a more app-like canvas.
+
+Browser support is necessarily device- and browser-version-specific. Test the
+actual tablet/browser combination you plan to use, especially on iOS/iPadOS
+where browser engines and certificate handling can impose additional limits.
+
+## Security and network posture
+
+Rylus can capture a desktop and inject input. Treat a running instance as a
+privileged LAN service.
+
+- **Keep it local.** The default bind address is `0.0.0.0`, so local-network
+  peers can reach it. Do not port-forward it or place it directly on the public
+  internet. Use a host firewall to limit access to trusted devices.
+- **Set an access code.** When configured, Rylus stores an Argon2id hash,
+  uses session cookies, and rate-limits failed authentication attempts. An
+  access code complements—rather than replaces—a trusted network boundary.
+- **Keep TLS enabled.** `auto` is the default mode: Rylus generates and stores
+  a self-signed certificate for the current user. The first browser visit will
+  need an explicit trust decision. If automatic TLS setup fails, the server
+  falls back to plaintext and logs a warning; do not ignore it.
+- **Use a real certificate when appropriate.** `certified` uses the supplied
+  certificate and key paths; it does not obtain a certificate for you. If
+  either path is absent, this version generates a self-signed pair at those
+  paths instead.
+
+```sh
+# Default: self-signed TLS, stored under the user state/config directory.
+./target/release/rylus --no-gui --access-code 'choose-a-long-code'
+
+# Supply a certificate and private key you manage.
+./target/release/rylus --no-gui \
+  --tls-mode certified \
+  --tls-cert-path /path/to/cert.der \
+  --tls-key-path /path/to/key.der
+
+# Only for a fully trusted network or a correctly configured TLS terminator.
+./target/release/rylus --no-gui --tls-mode disabled
+```
+
+`disabled`, `off`, and `none` all disable TLS. In that mode, access codes and
+input events travel in cleartext. mDNS is convenience discovery, not access
+control; disable it with `--no-mdns` if it is unsuitable for your network.
+
+The implementation details and known trade-offs—including origin checks that
+do not constrain non-browser clients—are documented in the
+[security review](docs/SECURITY-REVIEW.md). Security issues should follow the
+[security policy](SECURITY.md).
+
+### Linux `uinput` permissions
+
+Linux pen and multi-touch injection uses the kernel’s `uinput` interface.
+Giving a user access to `/dev/uinput` lets that user synthesize system-wide
+input, including while another user is logged in. Do not grant that access to
+untrusted accounts.
 
 ```sh
 sudo groupadd -r uinput
-sudo usermod -aG uinput $USER
+sudo usermod -aG uinput "$USER"
 echo 'KERNEL=="uinput", MODE="0660", GROUP="uinput", OPTIONS+="static_node=uinput"' \
-| sudo tee /etc/udev/rules.d/60-rylus.rules
-```
-
-Then either reboot, or run:
-
-```sh
+  | sudo tee /etc/udev/rules.d/60-rylus.rules
 sudo udevadm control --reload
 sudo udevadm trigger
 ```
 
-Then log out and log in again. To undo this:
+Log out and back in (or reboot) after changing group membership. To remove the
+rule later, delete `/etc/udev/rules.d/60-rylus.rules` and reload udev. The
+short version is also available in [docs/uinput.md](docs/uinput.md).
+
+## Operations and troubleshooting
+
+### Firewall and address
+
+Allow TCP port `1701` (or your chosen `--web-port`) between the client device
+and host. For example, with UFW:
 
 ```sh
-sudo rm /etc/udev/rules.d/60-rylus.rules
+sudo ufw allow 1701/tcp
 ```
 
-This allows your user to synthesize input events system-wide, even when another user is logged in. Untrusted users should not be added to the uinput group.
+If the client cannot connect, confirm that the devices have IP reachability,
+the firewall permits the selected TCP port, and the URL uses `https://` when
+TLS is active. With an automatically generated certificate, visit the Rylus
+URL directly and complete the browser’s certificate prompt before expecting a
+WebSocket connection to succeed.
 
-#### Wayland
+### Wayland
 
-Rylus supports Wayland via direct PipeWire bindings and the xdg-desktop-portal. Install `pipewire` and `xdg-desktop-portal` along with the portal backend for your compositor:
+Install PipeWire, `xdg-desktop-portal`, and the portal backend appropriate to
+your desktop environment. The portal shares the capture source you approve;
+Rylus cannot bypass those compositor permissions. The Wayland-specific limits
+are listed in the platform table above.
 
-- `xdg-desktop-portal-gtk` for GNOME
-- `xdg-desktop-portal-kde` for KDE
-- `xdg-desktop-portal-wlr` for wlroots-based compositors (Sway, etc.)
+### Optional second display
 
-Known limitations on Wayland:
-- Input mapping for individual windows is not supported
-- Window names may not display correctly
-- Cursor capture is not available
+Rylus can mirror a display without any virtual-display configuration. If you
+want the tablet to represent an additional desktop, create a virtual output in
+your display stack or attach a hardware dummy plug, configure it as an
+ordinary display, then select it as the capture source. Virtual-output support
+is environment-specific and can destabilize a graphics session; use your
+desktop environment’s documentation and keep a recovery path available.
 
-#### Hardware Acceleration
+### Headless health check
 
-On Linux, Rylus supports hardware accelerated video encoding through VAAPI or Nvidia's NVENC. Hardware acceleration is disabled by default because quality varies across hardware — enable it in the settings if your hardware produces acceptable results.
-
-**VAAPI configuration:**
-- Select a specific driver by setting `LIBVA_DRIVER_NAME`. List available drivers with:
-  ```sh
-  ls /usr/lib/dri/ | sed -n 's/^\(\S*\)_drv_video.so$/\1/p'
-  ```
-- On some distributions, drivers reside in a different directory (e.g. `/usr/lib/x86_64-linux-gnu/dri`). Set `LIBVA_DRIVERS_PATH` to override the search path.
-- Set `RYLUS_VAAPI_DEVICE` to specify which render node to use (e.g. `/dev/dri/renderD129`). On some systems this is required.
-
-**NVENC:** Fast encoding, but quality may be lower on older GPUs. Nvidia drivers must be installed.
-
-#### Rylus as Second Screen
-
-There are several ways to use Rylus to turn your tablet into a second screen.
-
-##### Intel GPU on Xorg with Intel Drivers
-
-Intel's drivers support creating virtual outputs configurable via xrandr.
-
-**Warning:** The following configuration can break X server startup. Make sure you know how to recover from a broken X configuration before proceeding.
-
-Install the `xf86-video-intel` driver and create `/etc/X11/xorg.conf.d/20-intel.conf`:
-```text
-Section "Device"
-    Identifier "intelgpu0"
-    Driver "intel"
-
-    # adds two virtual monitors
-    Option "VirtualHeads" "2"
-
-    # if your screen flickers, try uncommenting one of:
-    # Option "TripleBuffer" "true"
-    # Option "TearFree"     "true"
-    # Option "DRI"          "false"
-EndSection
-```
-
-After a reboot, `xrandr` will show `VIRTUAL1` and `VIRTUAL2`. To activate a virtual monitor at 1112x834 @ 60 Hz:
-```console
-> gtf 1112 834 60
-
-  # 1112x834 @ 60.00 Hz (GTF) hsync: 51.78 kHz; pclk: 75.81 MHz
-  Modeline "1112x834_60.00"  75.81  1112 1168 1288 1464  834 835 838 863  -HSync +Vsync
-> xrandr --newmode "1112x834_60.00"  75.81  1112 1168 1288 1464  834 835 838 863  -HSync +Vsync
-> xrandr --addmode VIRTUAL1 1112x834_60.00
-> xrandr --output VIRTUAL1 --mode 1112x834_60.00
-```
-
-Configure this monitor in your system settings like a regular second display. In Rylus, select it from the capture menu. You may want to enable cursor display.
-
-##### Dummy Plugs
-
-HDMI, DisplayPort, or VGA dummy plugs are inexpensive devices that simulate a connected monitor. Plug one in, configure the additional display in your system settings, then select it in Rylus.
-
-##### Other Options
-
-The following are less tested — contributions to expand this documentation are welcome:
-- On Wayland with Sway, `create_output` can [create headless outputs](https://github.com/swaywm/sway/releases/tag/1.5) (see [sway#5553](https://github.com/swaywm/sway/issues/5553))
-- On Wayland with GNOME, mutter supports [virtual monitors](https://gitlab.gnome.org/GNOME/mutter/-/merge_requests/1698)
-
-#### Encryption
-
-Rylus enables TLS by default (`--tls-mode auto`): a self-signed certificate is generated on first run and reused on subsequent starts. Your browser will warn that the certificate is untrusted — this is expected for a self-signed certificate and can be accepted.
-
-To use a CA-signed certificate instead (no browser warning):
+The built-in self-test uses a synthetic capture source, encodes one software
+H.264 frame, opens a loopback WebSocket, and exits with status `0` or `1`.
+It does not verify a real display, GPU encoder, portal, or input device.
 
 ```sh
-rylus --tls-mode certified --tls-cert-path /path/to/cert.pem --tls-key-path /path/to/key.pem
+./target/release/rylus --self-test
 ```
 
-To run without TLS (e.g. behind a reverse proxy that handles it):
+For opt-in per-frame server-side capture→encode→send timing, use
+`--latency-log` and read [docs/LATENCY.md](docs/LATENCY.md). It is not an
+end-to-end pointer-to-photon measurement.
+
+## Architecture
+
+The browser sends control data over WebSocket and receives fragmented-MP4 H.264
+video for Media Source Extensions playback. The native server selects a capture
+backend, encodes frames with FFmpeg, and maps browser input into the host’s
+native input APIs. The wire format and compatibility rules are in
+[docs/PROTOCOL.md](docs/PROTOCOL.md); the component boundaries are in
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+
+Rylus is organized as a Cargo workspace:
+
+| Crate | Responsibility |
+| --- | --- |
+| `rylus-core` | Configuration, protocol, errors, pixels, shared interfaces |
+| `rylus-capture` | X11, PipeWire, CoreGraphics, and Windows capture backends |
+| `rylus-encode` | FFmpeg-based H.264/fMP4 encoding |
+| `rylus-input` | Linux `uinput`, generic, and Windows input backends |
+| `rylus-transport` | WebSocket transport |
+| `rylus-gui` | Native egui/eframe interface |
+| `rylus-server` | HTTP(S), sessions, TLS, mDNS, and the `rylus` binary |
+
+## Development
 
 ```sh
-rylus --tls-mode disabled
+npm ci
+npm test
+cargo test --workspace --locked
+cargo fmt -- --check
+cargo clippy --all-targets -- -D warnings
+cargo run -q -p rylus-server -- --self-test
 ```
 
-Note for Firefox users: a [known bug](https://bugzilla.mozilla.org/show_bug.cgi?id=1187666) prevents accepting self-signed certificates for WebSocket connections when the TLS warning is shown. As a workaround, visit the Rylus URL directly in the address bar first and accept the certificate, then reload the page normally.
+`npm run a11y` runs the browser accessibility checks and requires the
+Playwright Chromium browser to be installed. See
+[CONTRIBUTING.md](CONTRIBUTING.md), [ROADMAP.md](ROADMAP.md), and the
+[architecture decision records](docs/adr/README.md) for project direction and
+contribution context.
 
-### macOS
+## Lineage, attribution, and licensing
 
-Download `Rylus-<version>-universal.dmg` from the [releases page](https://github.com/revoydotdev/rylus/releases), open it, and drag `Rylus.app` into `/Applications`. The DMG is notarized, so Gatekeeper should let it open without extra steps.
+Rylus is a substantial derivative of [Weylus](https://github.com/H-M-H/Weylus)
+by H-M-H. Weylus established the browser-Pointer-Events model and native
+capture/input server on which Rylus builds. Rylus has since been reorganized as
+a Rust workspace and uses distinct capture, GUI, transport, and security
+implementations, but it does not erase its upstream origin or attribution.
 
-On first launch, macOS will prompt for the permissions below — grant them via System Settings → Privacy & Security if you decline the prompt initially:
-- Incoming connections
-- Screen capturing
-- Controlling your desktop
+The program as a whole is licensed under the
+[GNU Affero General Public License, version 3 or later](LICENSE). The
+repository also preserves a mixed-license history: contributions identified in
+[CONTRIBUTORS](CONTRIBUTORS) are available under the 3-Clause BSD License, as
+specified by the repository’s license notice. Keep both the upstream notices
+and the applicable license terms when redistributing or modifying Rylus.
 
-#### Hardware Acceleration
-
-Rylus can use the VideoToolbox framework on macOS for hardware accelerated encoding. Video quality may be lower than software encoding, so VideoToolbox is disabled by default.
-
-### Windows
-
-#### Hardware Acceleration
-
-Rylus supports Nvidia's NVENC and Microsoft's MediaFoundation for hardware accelerated encoding. Due to varying quality across hardware, both are disabled by default.
-
-## Building
-
-Building Rylus requires Rust, make, git, a C compiler (for FFmpeg and system library linkage), nasm, and Node.js (esbuild handles TypeScript compilation automatically via build.rs).
-
-```sh
-cargo build            # debug build
-cargo build --release  # release build (LTO enabled)
-```
-
-### Linux Dependencies
-
-**Debian/Ubuntu:**
-```sh
-sudo apt-get install -y \
-  libpipewire-0.3-dev libdbus-1-dev \
-  libavcodec-dev libavformat-dev libavfilter-dev libavutil-dev \
-  libswscale-dev libswresample-dev \
-  libwayland-dev libxkbcommon-dev libdrm-dev libva-dev \
-  pkg-config clang nasm
-```
-
-**Fedora:**
-```sh
-sudo dnf install pipewire-devel dbus-devel \
-  ffmpeg-devel libdrm-devel libva-devel \
-  wayland-devel libxkbcommon-devel \
-  pkg-config clang nasm npm
-```
-
-**Arch Linux:**
-```sh
-sudo pacman -S pipewire ffmpeg libva libdrm \
-  wayland libxkbcommon pkg-config clang nasm
-```
-
-On Windows, only MSVC is supported as the C compiler.
-
-### Docker
-
-A Dockerfile for building the Linux version is located at [docker/Dockerfile](docker/Dockerfile):
-
-```sh
-docker build -t rylus-build docker/
-docker run -it rylus-build bash
-root@container:/# git clone https://github.com/revoydotdev/rylus
-root@container:/# cd rylus/
-root@container:/rylus# cargo build --release
-```
-
-Copy the binary out of the container:
-```sh
-docker cp <container-id>:/rylus/target/release/rylus ~/rylus
-```
-
-To build a .deb package, install `cargo-deb` inside the container and run `cargo deb`.
-
-## How Does This Work?
-
-### Stylus and Touch
-
-Modern browsers expose [PointerEvents](https://developer.mozilla.org/en-US/docs/Web/API/PointerEvent) that carry not only mouse position but also stylus pressure, tilt, and touch contact geometry. Rylus serves a web client that captures these events and sends them to the server over a WebSocket connection (with auto-reconnect and exponential backoff).
-
-On the server side, Rylus processes these events through either the generic OS-independent backend (mouse control only) or, on Linux, the uinput backend. The uinput backend uses the kernel's uinput module to create virtual input devices — mouse, stylus, and multi-touch — that applications see as real hardware.
-
-### Screen Mirroring and Window Capture
-
-On Linux with X11, Rylus connects to the X server using [x11rb](https://github.com/psychon/x11rb) for window enumeration and screen capture. The MIT-SHM extension provides shared memory image transfer for fast capture without copying pixel data over the socket.
-
-On Linux with Wayland, [pipewire-rs](https://gitlab.freedesktop.org/pipewire/pipewire-rs) captures the screen through the xdg-desktop-portal. Portal sessions are cached to avoid redundant D-Bus roundtrips and compositor permission prompts. DMA-BUF and MemFd buffers are explicitly synchronized before access.
-
-On macOS, CoreGraphics handles screen capture. On Windows, GDI capture is used via Microsoft's official [windows](https://github.com/microsoft/windows-rs) crate.
-
-Captured frames are encoded to an H.264 video stream using FFmpeg (linked via ffmpeg-sys-next). The stream is packaged in fragmented MP4 containers so browsers can play it through the [Media Source Extensions](https://developer.mozilla.org/en-US/docs/Web/API/Media_Source_Extensions_API) API. H.264 is chosen for broad hardware and browser support.
-
-## FAQ
-
-**Q: The page does not load on my tablet / I get a timeout.**
-A: A firewall is likely blocking the connection. Open port 1701 (or whichever port you configured with `--web-port`). The WebSocket stream is served on the same port.
-
-**Q: I get `ERROR Failed to create uinput device: CError: code...`**
-A: uinput is probably misconfigured. Verify you followed all [setup steps](#linux) and logged out and back in. Very old kernels may not support the required features — upgrade your system if needed.
-
-**Q: The "Capture" dropdown is empty and the screen is not mirrored.**
-A: Check that port 1701 (or your `--web-port`) is open in your firewall. The WebSocket stream is served on the same port as the HTTP interface.
-
-**Q: I can only see the whole screen in the "Capture" dropdown, not individual windows.**
-A: On macOS and Windows, per-window capture is not implemented. On Linux, your window manager may not support [Extended Window Manager Hints](https://specifications.freedesktop.org/wm-spec/latest/) or you may need to enable them (e.g. in XMonad).
-
-**Q: Do I have to set up Rylus as a second screen?**
-A: No, the second screen setup is entirely optional. Rylus works as a mirror/input device without it.
-
-**Q: I cannot connect my tablet to the URL Rylus displays.**
-A: Your computer and tablet may be on different networks. Verify they are on the same local network.
-
-**Q: This does not work in Firefox for Android.**
-A: It does — make sure Firefox 80 or later is installed.
-
-**Q: This does not work in Chrome on my iPad.**
-A: Chrome on iPadOS/iOS lacks some video streaming features. Use Firefox or Safari instead.
-
-**Q: Can I use Rylus without WiFi?**
-A: Yes. Options include:
-- Create a WiFi hotspot on your tablet and connect your computer to it
-- Use USB tethering for a direct peer-to-peer connection
-- On Android, use ADB port forwarding:
-  ```console
-  adb reverse tcp:1701 tcp:1701
-  ```
-  Then connect from your Android device to `http://127.0.0.1:1701` (or `https://` if TLS is enabled).
-
-Rylus only requires IP connectivity between the two devices — WiFi is one option among several.
-
----
-
-Rylus is a fork of [Weylus](https://github.com/H-M-H/Weylus) by H-M-H, licensed under [AGPL-3.0-or-later](LICENSE).
+Rylus is provided without warranty. See [LICENSE](LICENSE) for the complete
+terms.
