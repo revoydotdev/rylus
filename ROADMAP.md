@@ -19,6 +19,18 @@ already attributed in `README.md`, `docs/ARCHITECTURE.md`, the ADRs, and the
 upstream `LICENSE`/`CONTRIBUTORS` notices; preserve these in derivative
 packaging and portfolio descriptions.
 
+The 2026-11-09 Dependabot review found 24 open alert rows (7 high, 11 medium,
+6 low), all matching the current lockfiles. The affected ranges and resulting
+locked versions are: rustls `<0.23.46` → `0.23.46`; undici `>=7.0.0, <7.30.1`
+or `<7.29.1` → `7.30.2`; Vite `>=8.2.0, <=8.2.3` → `8.3.7`;
+source-map-js `>=1.0.0, <1.2.2` → `1.2.2`; and @vitest/mocker
+`>=2.1.0-beta.7, <4.1.12` or `>=4.1.11, <4.1.12` → `4.1.12`. The lockfile
+also aligns `@vitest/coverage-v8` to `4.1.12` for Vitest's exact peer version.
+`npm audit --package-lock-only --json` reports zero vulnerabilities, and
+locked Cargo metadata/dependency-graph checks pass. No install, build, or test
+was run for these dependency changes, so compatibility still needs CI/runtime
+validation.
+
 Scheme: milestones (`# M#`) → phases (`## M#.P#`) → stages (`### M#.P#.S#`) →
 todos. Each todo is atomic and verifiable:
 
