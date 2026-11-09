@@ -4118,7 +4118,7 @@ checksum = "b39cdef0fa800fc44525c84ccb54a029961a8215f9619753635a9c0d2538d46d"
 
 [[package]]
 name = "rylus-capture"
-version = "0.17.0"
+version = "0.18.0"
 dependencies = [
  "captrs",
  "core-foundation 0.10.1",
@@ -4136,7 +4136,7 @@ dependencies = [
 
 [[package]]
 name = "rylus-core"
-version = "0.17.0"
+version = "0.18.0"
 dependencies = [
  "bitflags 2.11.0",
  "clap",
@@ -4150,7 +4150,7 @@ dependencies = [
 
 [[package]]
 name = "rylus-encode"
-version = "0.17.0"
+version = "0.18.0"
 dependencies = [
  "criterion",
  "ffmpeg-sys-next",
@@ -4162,7 +4162,7 @@ dependencies = [
 
 [[package]]
 name = "rylus-gui"
-version = "0.17.0"
+version = "0.18.0"
 dependencies = [
  "eframe",
  "egui",
@@ -4178,7 +4178,7 @@ dependencies = [
 
 [[package]]
 name = "rylus-input"
-version = "0.17.0"
+version = "0.18.0"
 dependencies = [
  "enigo",
  "evdev",
@@ -4190,7 +4190,7 @@ dependencies = [
 
 [[package]]
 name = "rylus-server"
-version = "0.17.0"
+version = "0.18.0"
 dependencies = [
  "argon2",
  "bytes",
@@ -4229,7 +4229,7 @@ dependencies = [
 
 [[package]]
 name = "rylus-transport"
-version = "0.17.0"
+version = "0.18.0"
 dependencies = [
  "futures-util",
  "hyper",

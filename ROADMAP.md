@@ -1,8 +1,23 @@
 # Rylus — Roadmap
 
-Decomposition of the path from the current state (`0.17.0` in `Cargo.toml`;
+Decomposition of the path from the current state (`0.18.0` in `Cargo.toml`;
 core stack production-grade; ~85% to 1.0.0) to the **1.0.0** release defined in
 [`VISION.md`](VISION.md).
+
+## Current status — 2026-11-09
+
+The audit snapshot's Build and Bench failures refer to commit
+`1cea75ff6a83e41cfdd39155fd5afb1388467de1` from 2026-08-31; they are historical
+signals, not current-branch results. On the current checkout (`1378d7b`),
+`CARGO_BUILD_JOBS=2 cargo clippy --all-targets -- -D warnings` and
+`cargo fmt -- --check` both pass. The benchmark gate and workspace tests were
+not rerun in this remediation round, so M1 quality gates remain open. The
+workspace lockfile now matches the declared 0.18.0 version; upstream locked CI
+commands and corrected repository URLs are preserved in the publication patch. No
+cross-platform build or runtime acceptance is claimed here. Weylus lineage is
+already attributed in `README.md`, `docs/ARCHITECTURE.md`, the ADRs, and the
+upstream `LICENSE`/`CONTRIBUTORS` notices; preserve these in derivative
+packaging and portfolio descriptions.
 
 Scheme: milestones (`# M#`) → phases (`## M#.P#`) → stages (`### M#.P#.S#`) →
 todos. Each todo is atomic and verifiable:
@@ -229,7 +244,7 @@ and the Done-at-1.0.0 checklist in `VISION.md`).
 
 ### M5.P1.S1 — Tag history
 
-- **`M5.P1.S1.T1`** — Record an ADR resolving whether to back-annotate the 0.7–0.17 line or start the tag history clean at `v1.0.0` (Cargo is at 0.17.0; git is tagged only through v0.6.1). → *Artifact:* `ls docs/adr/ADR-*version* 2>/dev/null | head -1` · *Concern:* release
+- **`M5.P1.S1.T1`** — Record an ADR resolving whether to back-annotate the 0.7–0.18 line or start the tag history clean at `v1.0.0` (Cargo is at 0.18.0; git is tagged only through v0.6.1). → *Artifact:* `ls docs/adr/ADR-*version* 2>/dev/null | head -1` · *Concern:* release
 - **`M5.P1.S1.T2`** — Set the workspace version to `1.0.0` in `Cargo.toml` and refresh `Cargo.lock`. → *Artifact:* `grep -q '^version = "1.0.0"' Cargo.toml` · *Concern:* release
 
 ## M5.P2 — Release verification
